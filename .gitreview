@@ -1,0 +1,5 @@
+[gerrit]
+host=review.elasticdb.org
+port=29418
+project=tesora/tesora-trove.git
+defaultbranch=dev/EE-1.6
