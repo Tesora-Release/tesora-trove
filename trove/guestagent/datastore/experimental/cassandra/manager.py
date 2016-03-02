@@ -34,21 +34,27 @@ from trove.guestagent import volume
 
 CONF = cfg.CONF
 LOG = logging.getLogger(__name__)
-MANAGER = CONF.datastore_manager
+MANAGER = CONF.datastore_manager if CONF.datastore_manager else 'cassandra'
 
 
 class Manager(manager.Manager):
 
     def __init__(self):
-        self.appStatus = service.CassandraAppStatus(
-            service.CassandraApp.get_current_superuser())
-        self.app = service.CassandraApp(self.appStatus)
+        self._app = service.CassandraApp()
         self.__admin = CassandraAdmin(self.app.get_current_superuser())
         super(Manager, self).__init__()
 
     @property
     def status(self):
-        return self.appStatus
+        return self.app.status
+
+    @property
+    def app(self):
+        return self._app
+
+    @property
+    def admin(self):
+        return self.__admin
 
     @property
     def configuration_manager(self):
@@ -63,8 +69,7 @@ class Manager(manager.Manager):
 
     def get_filesystem_stats(self, context, fs_path):
         """Gets the filesystem stats for the path given."""
-        mount_point = CONF.get(
-            'mysql' if not MANAGER else MANAGER).mount_point
+        mount_point = CONF.get(MANAGER).mount_point
         return dbaas.get_filesystem_volume_stats(mount_point)
 
     def start_db_with_conf_changes(self, context, config_contents):
@@ -83,6 +88,7 @@ class Manager(manager.Manager):
         """This is called from prepare in the base class."""
         self.app.install_if_needed(packages)
         self.app.init_storage_structure(mount_point)
+
         if config_contents or device_path or backup_info:
 
             # FIXME(pmalik) Once the cassandra bug
@@ -100,7 +106,7 @@ class Manager(manager.Manager):
             # we assume it is not going to and proceed with configuration
             # right away.
             LOG.debug("Waiting for database first boot.")
-            if (self.appStatus.wait_for_real_status_to_change_to(
+            if (self.app.status.wait_for_real_status_to_change_to(
                     trove_instance.ServiceStatuses.RUNNING,
                     CONF.state_change_wait_time,
                     False)):
@@ -111,9 +117,18 @@ class Manager(manager.Manager):
             LOG.debug("Starting initial configuration.")
             if config_contents:
                 LOG.debug("Applying configuration.")
-                self.app.write_config(config_contents, is_raw=True)
-                # Instance nodes use the unique guest id by default.
-                self.app.apply_initial_guestagent_configuration()
+                self.app.configuration_manager.save_configuration(
+                    config_contents)
+                cluster_name = None
+                if cluster_config:
+                    cluster_name = cluster_config.get('id', None)
+                self.app.apply_initial_guestagent_configuration(
+                    cluster_name=cluster_name)
+
+            if cluster_config:
+                self.app.write_cluster_topology(
+                    cluster_config['dc'], cluster_config['rack'],
+                    prefer_local=True)
 
             if device_path:
                 LOG.debug("Preparing data volume.")
@@ -129,88 +144,86 @@ class Manager(manager.Manager):
                 LOG.debug("Mounting new volume.")
                 device.mount(mount_point)
 
-            if backup_info:
-                self._perform_restore(backup_info, context, mount_point)
+            if not cluster_config:
+                if backup_info:
+                    self._perform_restore(backup_info, context, mount_point)
 
-            LOG.debug("Starting database with configuration changes.")
-            self.app.start_db(update_db=False)
+                LOG.debug("Starting database with configuration changes.")
+                self.app.start_db(update_db=False)
 
-            if not service.CassandraApp.has_user_config():
-                LOG.debug("Securing superuser access.")
-                self.app.configure_superuser_access()
-                self.app.restart()
+                if not self.app.has_user_config():
+                    LOG.debug("Securing superuser access.")
+                    self.app.secure()
+                    self.app.restart()
 
-        self.__admin = CassandraAdmin(self.app.get_current_superuser())
+            self.__admin = CassandraAdmin(self.app.get_current_superuser())
 
-        if databases:
-            self.create_database(context, databases)
-
-        if users:
-            self.create_user(context, users)
+        if not cluster_config:
+            if databases:
+                self.create_database(context, databases)
+            if users:
+                self.create_user(context, users)
+            if self.is_root_enabled(context):
+                self.status.report_root(context,
+                                        self.app.default_superuser_name)
 
     def change_passwords(self, context, users):
         with EndNotification(context):
-            self.__admin.change_passwords(context, users)
+            self.admin.change_passwords(context, users)
 
     def update_attributes(self, context, username, hostname, user_attrs):
         with EndNotification(context):
-            self.__admin.update_attributes(context, username, hostname,
-                                           user_attrs)
+            self.admin.update_attributes(context, username, hostname,
+                                         user_attrs)
 
     def create_database(self, context, databases):
         with EndNotification(context):
-            self.__admin.create_database(context, databases)
+            self.admin.create_database(context, databases)
 
     def create_user(self, context, users):
         with EndNotification(context):
-            self.__admin.create_user(context, users)
+            self.admin.create_user(context, users)
 
     def delete_database(self, context, database):
         with EndNotification(context):
-            self.__admin.delete_database(context, database)
+            self.admin.delete_database(context, database)
 
     def delete_user(self, context, user):
         with EndNotification(context):
-            self.__admin.delete_user(context, user)
+            self.admin.delete_user(context, user)
 
     def get_user(self, context, username, hostname):
-        return self.__admin.get_user(context, username, hostname)
+        return self.admin.get_user(context, username, hostname)
 
     def grant_access(self, context, username, hostname, databases):
-        self.__admin.grant_access(context, username, hostname, databases)
+        self.admin.grant_access(context, username, hostname, databases)
 
     def revoke_access(self, context, username, hostname, database):
-        self.__admin.revoke_access(context, username, hostname, database)
+        self.admin.revoke_access(context, username, hostname, database)
 
     def list_access(self, context, username, hostname):
-        return self.__admin.list_access(context, username, hostname)
+        return self.admin.list_access(context, username, hostname)
 
     def list_databases(self, context, limit=None, marker=None,
                        include_marker=False):
-        return self.__admin.list_databases(context, limit, marker,
-                                           include_marker)
+        return self.admin.list_databases(context, limit, marker,
+                                         include_marker)
 
     def list_users(self, context, limit=None, marker=None,
                    include_marker=False):
-        return self.__admin.list_users(context, limit, marker, include_marker)
+        return self.admin.list_users(context, limit, marker, include_marker)
 
     def enable_root(self, context):
-        raise exception.DatastoreOperationNotSupported(
-            operation='enable_root', datastore=MANAGER)
+        return self.app.enable_root()
 
     def enable_root_with_password(self, context, root_password=None):
-        LOG.debug("Enabling root with password.")
-        raise exception.DatastoreOperationNotSupported(
-            operation='enable_root_with_password', datastore=MANAGER)
+        return self.app.enable_root(root_password=root_password)
 
     def disable_root(self, context):
-        LOG.debug("Disabling root.")
-        raise exception.DatastoreOperationNotSupported(
-            operation='disable_root', datastore=MANAGER)
+        self.app.enable_root(root_password=None)
 
     def is_root_enabled(self, context):
-        raise exception.DatastoreOperationNotSupported(
-            operation='is_root_enabled', datastore=MANAGER)
+        return self.app.is_root_enabled()
 
     def _perform_restore(self, backup_info, context, restore_location):
         LOG.info(_("Restoring database from backup %s.") % backup_info['id'])
@@ -258,7 +271,8 @@ class Manager(manager.Manager):
         LOG.debug("Updating overrides.")
         if remove:
             self.app.remove_overrides()
-        self.app.update_overrides(context, overrides, remove)
+        else:
+            self.app.update_overrides(context, overrides, remove)
 
     def apply_overrides(self, context, overrides):
         """Configuration changes are made in the config YAML file and
@@ -288,7 +302,8 @@ class Manager(manager.Manager):
         raise exception.DatastoreOperationNotSupported(
             operation='make_read_only', datastore=MANAGER)
 
-    def enable_as_master(self, context, replica_source_config):
+    def enable_as_master_s2(self, context, replica_source_config,
+                            for_failover=False):
         raise exception.DatastoreOperationNotSupported(
             operation='enable_as_master', datastore=MANAGER)
 
@@ -308,3 +323,39 @@ class Manager(manager.Manager):
         LOG.debug("Demoting replication master.")
         raise exception.DatastoreOperationNotSupported(
             operation='demote_replication_master', datastore=MANAGER)
+
+    def get_data_center(self, context):
+        return self.app.get_data_center()
+
+    def get_rack(self, context):
+        return self.app.get_rack()
+
+    def set_seeds(self, context, seeds):
+        self.app.set_seeds(seeds)
+
+    def get_seeds(self, context):
+        return self.app.get_seeds()
+
+    def set_auto_bootstrap(self, context, enabled):
+        self.app.set_auto_bootstrap(enabled)
+
+    def node_cleanup_begin(self, context):
+        self.app.node_cleanup_begin()
+
+    def node_cleanup(self, context):
+        self.app.node_cleanup()
+
+    def node_decommission(self, context):
+        self.app.node_decommission()
+
+    def cluster_secure(self, context, password):
+        os_admin = self.app.cluster_secure(password)
+        self.__admin = CassandraAdmin(self.app.get_current_superuser())
+        return os_admin
+
+    def get_admin_credentials(self, context):
+        return self.app.get_admin_credentials()
+
+    def store_admin_credentials(self, context, admin_credentials):
+        self.app.store_admin_credentials(admin_credentials)
+        self.__admin = CassandraAdmin(self.app.get_current_superuser())

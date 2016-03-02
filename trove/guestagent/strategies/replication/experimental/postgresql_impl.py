@@ -58,7 +58,6 @@ REPL_EXTRA_OPTS = CONF.backup_runner_options.get(REPL_BACKUP_STRATEGY, '')
 LOG = logging.getLogger(__name__)
 
 TRIGGER_FILE = '/tmp/postgresql.trigger'
-REWIND_REQUIRED_FILE = '/tmp/rewind_required'
 REPL_USER = 'replicator'
 SLAVE_STANDBY_OVERRIDE = 'SlaveStandbyOverride'
 
@@ -165,7 +164,7 @@ class PostgresqlReplicationStreaming(
                     "password '%s';" % (REPL_USER, pw))
         return pw
 
-    def enable_as_master(self, service, master_config):
+    def enable_as_master(self, service, master_config, for_failover=False):
         """For a server to be a master in postgres, we need to enable
         the replication user in pg_hba and ensure that WAL logging is
         at the appropriate level (use the same settings as backups)
@@ -201,12 +200,6 @@ class PostgresqlReplicationStreaming(
         # Ensure the WAL arch is empty before restoring
         PgSqlProcess.recreate_wal_archive_dir()
 
-        if operating_system.exists(REWIND_REQUIRED_FILE):
-            LOG.info("Rewind required")
-            operating_system.remove(REWIND_REQUIRED_FILE)
-            self.stop_db(context=None)
-            self._rewind_against_master()
-
     def detach_slave(self, service, for_failover):
         """Touch trigger file in to disable recovery mode"""
         LOG.debug("Detaching slave, use trigger file to disable recovery mode")
@@ -224,9 +217,6 @@ class PostgresqlReplicationStreaming(
         except exception.PollTimeOut:
             raise RuntimeError(_("Timeout occurred waiting for slave to exit"
                                  "recovery mode"))
-        if for_failover:
-            # Touch "rewind required file"
-            operating_system.write_file(REWIND_REQUIRED_FILE, '')
 
     def cleanup_source_on_replica_detach(self, admin_service, replica_info):
         pass

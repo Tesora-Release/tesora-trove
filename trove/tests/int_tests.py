@@ -28,8 +28,6 @@ from trove.tests.api.mgmt import datastore_versions
 from trove.tests.api.mgmt import hosts
 from trove.tests.api.mgmt import instances as mgmt_instances
 from trove.tests.api.mgmt import storage
-from trove.tests.api import pxc
-from trove.tests.api import redis
 from trove.tests.api import replication
 from trove.tests.api import root
 from trove.tests.api import user_access
@@ -39,13 +37,17 @@ from trove.tests.scenario.groups import backup_group
 from trove.tests.scenario.groups import cluster_actions_group
 from trove.tests.scenario.groups import database_actions_group
 from trove.tests.scenario.groups import instance_actions_group
+from trove.tests.scenario.groups import instance_create_group
 from trove.tests.scenario.groups import instance_delete_group
+from trove.tests.scenario.groups import instance_upgrade_group
 from trove.tests.scenario.groups import negative_cluster_actions_group
 from trove.tests.scenario.groups import replication_group
+from trove.tests.scenario.groups import root_actions_group
 from trove.tests.scenario.groups import user_actions_group
 
 
 GROUP_SERVICES_INITIALIZE = "services.initialize"
+GROUP_SETUP = 'dbaas.setup'
 
 
 def build_group(*groups):
@@ -121,71 +123,74 @@ proboscis.register(groups=["blackbox_mgmt"],
 #
 # Group designations for datastore agnostic int-tests
 #
-initial_groups = [
+base_groups = [
     GROUP_SERVICES_INITIALIZE,
     flavors.GROUP,
     versions.GROUP,
-    instances.GROUP_START_SIMPLE,
-    instance_delete_group.GROUP
+    GROUP_SETUP
 ]
-backup_groups = list(initial_groups)
+
+instance_create_groups = list(base_groups)
+instance_create_groups.extend([instance_create_group.GROUP,
+                               instance_delete_group.GROUP])
+
+instance_upgrade_groups = list(instance_create_groups)
+instance_upgrade_groups.extend([instance_upgrade_group.GROUP])
+
+backup_groups = list(instance_create_groups)
 backup_groups.extend([backup_group.GROUP])
 
-user_actions_groups = list(initial_groups)
+user_actions_groups = list(instance_create_groups)
 user_actions_groups.extend([user_actions_group.GROUP])
 
-database_actions_groups = list(initial_groups)
+database_actions_groups = list(instance_create_groups)
 database_actions_groups.extend([database_actions_group.GROUP])
 
-cluster_actions_groups = list(initial_groups)
+cluster_actions_groups = list(base_groups)
 cluster_actions_groups.extend([cluster_actions_group.GROUP,
                                negative_cluster_actions_group.GROUP])
 
-instance_actions_groups = list(initial_groups)
+instance_actions_groups = list(instance_create_groups)
 instance_actions_groups.extend([instance_actions_group.GROUP])
 
-replication_groups = list(initial_groups)
+replication_groups = list(instance_create_groups)
 replication_groups.extend([replication_group.GROUP])
+
+root_actions_groups = list(instance_create_groups)
+root_actions_groups.extend([root_actions_group.GROUP])
 
 # Module based groups
 register(["backup"], backup_groups)
 register(["cluster"], cluster_actions_groups)
-register(["database"], database_actions_group)
+register(["database"], database_actions_groups)
 register(["instance_actions"], instance_actions_groups)
+register(["instance_create"], instance_create_groups)
+register(["instance_upgrade"], instance_upgrade_groups)
 register(["user"], user_actions_groups)
 register(["replication"], replication_groups)
+register(["root"], root_actions_groups)
 
 # Datastore based groups - these should contain all functionality
 # currently supported by the datastore
-register(["cassandra_supported"], backup_groups, instance_actions_groups)
-register(["couchbase_supported"], instance_actions_groups)
+register(["cassandra_supported", "dse_supported"], backup_groups,
+         instance_actions_groups, user_actions_groups, database_actions_group,
+         root_actions_groups, cluster_actions_groups)
+register(["couchbase_supported"], instance_actions_groups, root_actions_groups,
+         backup_groups, cluster_actions_groups)
+register(["couchdb_supported"], instance_actions_groups)
 register(["postgresql_supported"], backup_groups, database_actions_groups,
-         instance_actions_groups, user_actions_groups)
+         instance_actions_groups, user_actions_groups, root_actions_groups)
 register(["mongodb_supported"], backup_groups, cluster_actions_groups,
-         database_actions_groups, instance_actions_groups, user_actions_groups)
-register(["mysql_supported"], backup_groups, database_actions_groups,
-         instance_actions_groups, replication_groups, user_actions_groups)
+         database_actions_groups, instance_actions_groups, user_actions_groups,
+         root_actions_groups)
+register(["mysql_supported", "mariadb_supported", "percona_supported"],
+         instance_upgrade_groups, backup_groups, database_actions_groups,
+         instance_actions_groups, replication_groups, user_actions_groups,
+         root_actions_groups)
 register(["redis_supported"], backup_groups, instance_actions_groups,
-         replication_groups)
+         replication_groups, cluster_actions_groups)
 register(["vertica_supported"], cluster_actions_groups,
-         instance_actions_groups)
+         instance_actions_groups, root_actions_groups)
 register(["pxc_supported"], instance_actions_groups, cluster_actions_groups)
-
-# Redis int-tests
-redis_group = [
-    GROUP_SERVICES_INITIALIZE,
-    flavors.GROUP,
-    versions.GROUP,
-    instances.GROUP_START_SIMPLE,
-    instances.GROUP_QUOTAS,
-    redis.REDIS_GROUP,
-]
-proboscis.register(groups=["redis"],
-                   depends_on_groups=redis_group)
-
-# PXC int-tests
-pxc_group = [
-    pxc.PXC_GROUP,
-]
-proboscis.register(groups=["pxc"],
-                   depends_on_groups=pxc_group)
+register(["db2_supported"], database_actions_groups,
+         instance_actions_groups, user_actions_groups)

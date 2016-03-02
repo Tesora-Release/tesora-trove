@@ -36,7 +36,9 @@ SERVICE_PARSERS = {
     'percona': configurations.MySQLConfParser,
     'postgresql': configurations.PostgresqlConfParser,
     'cassandra': configurations.CassandraConfParser,
+    'dse': configurations.CassandraConfParser,
     'redis': configurations.RedisConfParser,
+    'oracle': configurations.OracleConfParser,
 }
 
 

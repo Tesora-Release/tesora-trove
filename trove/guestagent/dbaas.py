@@ -44,6 +44,8 @@ defaults = {
     'trove.guestagent.datastore.experimental.redis.manager.Manager',
     'cassandra':
     'trove.guestagent.datastore.experimental.cassandra.manager.Manager',
+    'dse':
+    'trove.guestagent.datastore.experimental.dse.manager.Manager',
     'couchbase':
     'trove.guestagent.datastore.experimental.couchbase.manager.Manager',
     'mongodb':
@@ -72,21 +74,23 @@ def get_custom_managers():
 
 def datastore_registry():
     return dict(chain(defaults.iteritems(),
-                get_custom_managers().iteritems()))
+                      get_custom_managers().iteritems()))
 
 
 def to_gb(bytes):
     if bytes == 0:
         return 0.0
     size = bytes / 1024.0 ** 3
-    return round(size, 2)
+    # Make sure we don't return 0.0 if the size is greater than 0
+    return max(round(size, 2), 0.01)
 
 
 def to_mb(bytes):
     if bytes == 0:
         return 0.0
     size = bytes / 1024.0 ** 2
-    return round(size, 2)
+    # Make sure we don't return 0.0 if the size is greater than 0
+    return max(round(size, 2), 0.01)
 
 
 def get_filesystem_volume_stats(fs_path):

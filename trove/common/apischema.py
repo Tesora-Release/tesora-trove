@@ -342,7 +342,8 @@ instance = {
                             "version": non_empty_string
                         }
                     },
-                    "nics": nics
+                    "nics": nics,
+                    "locality": non_empty_string
                 }
             }
         }
@@ -361,6 +362,7 @@ instance = {
                     "replica_of": {},
                     "name": non_empty_string,
                     "configuration": configuration_id,
+                    "datastore_version": non_empty_string,
                 }
             }
         }

@@ -27,12 +27,14 @@ from trove.common import exception
 from trove.tests.api.instances import instance_info
 from trove.tests.config import CONFIG
 from trove.tests.util import create_dbaas_client
+from trove.tests.util import create_nova_client
 from trove.tests.util.users import Requirements
 
 CONF = cfg.CONF
 
 
 class TestRunner(object):
+
     """
     Base class for all 'Runner' classes.
 
@@ -62,14 +64,25 @@ class TestRunner(object):
     EPHEMERAL_SUPPORT = not VOLUME_SUPPORT and CONFIG.get('device_path', None)
     ROOT_PARTITION = not (VOLUME_SUPPORT or CONFIG.get('device_path', None))
 
+    report = CONFIG.get_report()
+
     def __init__(self, sleep_time=10, timeout=1200):
         self.def_sleep_time = sleep_time
         self.def_timeout = timeout
+
         self.instance_info = instance_info
+        instance_info.dbaas_datastore = CONFIG.dbaas_datastore
+        instance_info.dbaas_datastore_version = CONFIG.dbaas_datastore_version
+        if self.VOLUME_SUPPORT:
+            instance_info.volume = {'size': CONFIG.get('trove_volume_size', 1)}
+        else:
+            instance_info.volume = None
+
         self.auth_client = create_dbaas_client(self.instance_info.user)
         self.unauth_client = None
-        self.report = CONFIG.get_report()
+        self._nova_client = None
         self._test_helper = None
+        self._servers = {}
 
     @classmethod
     def fail(cls, message):
@@ -152,6 +165,12 @@ class TestRunner(object):
             requirements, black_list=[self.instance_info.user.auth_user])
         return create_dbaas_client(other_user)
 
+    @property
+    def nova_client(self):
+        if not self._nova_client:
+            self._nova_client = create_nova_client(self.instance_info.user)
+        return self._nova_client
+
     def assert_raises(self, expected_exception, expected_http_code,
                       client_cmd, *cmd_args, **cmd_kwargs):
         asserts.assert_raises(expected_exception, client_cmd,
@@ -164,26 +183,30 @@ class TestRunner(object):
         Use the current instance's datastore if None.
         """
         try:
-            return CONF.get(
-                datastore or self.instance_info.dbaas_datastore).get(name)
+            datastore = datastore or self.instance_info.dbaas_datastore
+            return CONF.get(datastore).get(name)
         except NoSuchOptError:
             return CONF.get(name)
 
     @property
     def is_using_existing_instance(self):
-        return os.environ.get(self.USE_INSTANCE_ID_FLAG, None) is not None
+        return self.has_env_flag(self.USE_INSTANCE_ID_FLAG)
+
+    @staticmethod
+    def has_env_flag(flag_name):
+        """Return whether a given flag was set."""
+        return os.environ.get(flag_name, None) is not None
 
     def get_existing_instance(self):
         if self.is_using_existing_instance:
             instance_id = os.environ.get(self.USE_INSTANCE_ID_FLAG)
-            return self._get_instance_info(instance_id)
+            return self.get_instance(instance_id)
 
         return None
 
     @property
     def has_do_not_delete_instance(self):
-        return os.environ.get(
-            self.DO_NOT_DELETE_INSTANCE_FLAG, None) is not None
+        return self.has_env_flag(self.DO_NOT_DELETE_INSTANCE_FLAG)
 
     def assert_instance_action(
             self, instance_ids, expected_states, expected_http_code):
@@ -216,23 +239,43 @@ class TestRunner(object):
                 self.fail(str(task.poll_exception()))
 
     def _assert_instance_states(self, instance_id, expected_states,
-                                fast_fail_status='ERROR'):
-        for status in expected_states:
-            start_time = timer.time()
-            try:
-                poll_until(lambda: self._has_status(
-                    instance_id, status, fast_fail_status=fast_fail_status),
-                    sleep_time=self.def_sleep_time,
-                    time_out=self.def_timeout)
-                self.report.log("Instance has gone '%s' in %s." %
-                                (status, self._time_since(start_time)))
-            except exception.PollTimeOut:
-                self.report.log(
-                    "Status of instance '%s' did not change to '%s' after %s."
-                    % (instance_id, status, self._time_since(start_time)))
-                return False
+                                fast_fail_status=['ERROR', 'FAILED'],
+                                require_all_states=False):
+        """Keep polling for the expected instance states until the instance
+        acquires either the last or fast-fail state.
 
-        return True
+        If the instance state does not match the state expected at the time of
+        polling (and 'require_all_states' is not set) the code assumes the
+        instance had already acquired before and moves to the next expected
+        state.
+        """
+
+        found = False
+        for status in expected_states:
+            if require_all_states or found or self._has_status(
+                    instance_id, status, fast_fail_status=fast_fail_status):
+                found = True
+                start_time = timer.time()
+                try:
+                    poll_until(lambda: self._has_status(
+                        instance_id, status,
+                        fast_fail_status=fast_fail_status),
+                        sleep_time=self.def_sleep_time,
+                        time_out=self.def_timeout)
+                    self.report.log("Instance has gone '%s' in %s." %
+                                    (status, self._time_since(start_time)))
+                except exception.PollTimeOut:
+                    self.report.log(
+                        "Status of instance '%s' did not change to '%s' "
+                        "after %s."
+                        % (instance_id, status, self._time_since(start_time)))
+                    return False
+            else:
+                self.report.log(
+                    "Instance state was not '%s', moving to the next expected "
+                    "state." % status)
+
+        return found
 
     def _time_since(self, start_time):
         return '%.1fs' % (timer.time() - start_time)
@@ -288,13 +331,47 @@ class TestRunner(object):
                    sleep_time=sleep_time, time_out=time_out)
 
     def _has_status(self, instance_id, status, fast_fail_status=None):
+        fast_fail_status = fast_fail_status or []
         instance = self.get_instance(instance_id)
-        self.report.log("Waiting for instance '%s' to become '%s': %s"
+        self.report.log("Polling instance '%s' for state '%s', was '%s'."
                         % (instance_id, status, instance.status))
-        if fast_fail_status and instance.status == fast_fail_status:
+        if instance.status in fast_fail_status:
             raise RuntimeError("Instance '%s' acquired a fast-fail status: %s"
-                               % (instance_id, status))
+                               % (instance_id, instance.status))
         return instance.status == status
+
+    def get_server(self, instance_id):
+        server = None
+        if instance_id in self._servers:
+            server = self._servers[instance_id]
+        else:
+            instance = self.get_instance(instance_id)
+            self.report.log("Getting server for instance: %s" % instance)
+            for nova_server in self.nova_client.servers.list():
+                if str(nova_server.name) == instance.name:
+                    server = nova_server
+                    break
+            if server:
+                self._servers[instance_id] = server
+        return server
+
+    def assert_server_group(self, instance_id, should_exist):
+        """Check that the Nova instance associated with instance_id
+        belongs to a server group, based on the 'should_exist' flag.
+        """
+        server = self.get_server(instance_id)
+        self.assert_is_not_none(server, "Could not find Nova server for '%s'" %
+                                instance_id)
+        server_group = None
+        server_groups = self.nova_client.server_groups.list()
+        for sg in server_groups:
+            if server.id in sg.members:
+                server_group = sg
+        if should_exist and server_group is None:
+            raise ("Could not find server group for Nova instance %s" %
+                   server.id)
+        if server_group and not should_exist:
+            raise ("Found left-over server group: %s" % server_group)
 
     def get_instance(self, instance_id):
         return self.auth_client.instances.get(instance_id)
@@ -318,3 +395,46 @@ class TestRunner(object):
         self.assert_is_not_none(flavor, "Flavor '%s' not found." % flavor_name)
 
         return flavor
+
+    def copy_dict(self, d, ignored_keys=None):
+        return {k: v for k, v in d.items()
+                if not ignored_keys or k not in ignored_keys}
+
+    def create_test_helper_on_instance(self, instance_id):
+        """Here we add a helper user/database, if any, to a given instance
+        via the Trove API.
+        These are for internal use by the test framework and should
+        not be changed by individual test-cases.
+        """
+        database_def, user_def = self.build_helper_defs()
+        if database_def:
+            self.report.log(
+                "Creating a helper database '%s' on instance: %s"
+                % (database_def['name'], instance_id))
+            self.auth_client.databases.create(instance_id, [database_def])
+
+        if user_def:
+            self.report.log(
+                "Creating a helper user '%s:%s' on instance: %s"
+                % (user_def['name'], user_def['password'], instance_id))
+            self.auth_client.users.create(instance_id, [user_def])
+
+    def build_helper_defs(self):
+        """Build helper database and user JSON definitions if credentials
+        are defined by the helper.
+        """
+        database_def = None
+        user_def = None
+        credentials = self.test_helper.get_helper_credentials()
+        if credentials:
+            database = credentials.get('database')
+            if database:
+                database_def = {'name': database}
+
+            username = credentials.get('name')
+            if username:
+                password = credentials.get('password', '')
+                user_def = {'name': username, 'password': password,
+                            'databases': [{'name': database}]}
+
+        return database_def, user_def

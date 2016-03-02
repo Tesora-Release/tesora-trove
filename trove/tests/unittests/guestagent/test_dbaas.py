@@ -43,12 +43,9 @@ from trove.common import instance as rd_instance
 from trove.common import utils
 from trove.conductor import api as conductor_api
 from trove.guestagent.common import operating_system
-from trove.guestagent.common.operating_system import FileMode
 from trove.guestagent.common import sql_query
 from trove.guestagent.datastore.experimental.cassandra import (
     service as cass_service)
-from trove.guestagent.datastore.experimental.cassandra import (
-    system as cass_system)
 from trove.guestagent.datastore.experimental.couchbase import (
     service as couchservice)
 from trove.guestagent.datastore.experimental.couchdb import (
@@ -84,11 +81,11 @@ from trove.guestagent.db import models
 from trove.guestagent import dbaas as dbaas_sr
 from trove.guestagent.dbaas import get_filesystem_volume_stats
 from trove.guestagent.dbaas import to_gb
+from trove.guestagent.dbaas import to_mb
 from trove.guestagent import pkg
 from trove.guestagent.volume import VolumeDevice
 from trove.instance.models import InstanceServiceStatus
 from trove.tests.unittests.util import util
-import yaml
 
 CONF = cfg.CONF
 
@@ -182,18 +179,20 @@ class DbaasTest(testtools.TestCase):
         self.assertEqual(1, mock_execute.call_count)
         mock_remove.assert_not_called()
 
-    @patch.object(MySqlApp.configuration_manager, 'get_value',
-                  return_value=MagicMock({'get': 'some password'}))
-    def test_get_auth_password(self, get_cnf_mock):
+    @patch.object(operating_system, 'read_file',
+                  return_value={'client':
+                                {'password': 'some password'}})
+    def test_get_auth_password(self, read_file_mock):
         password = MySqlApp.get_auth_password()
-        get_cnf_mock.assert_called_once_with('client')
-        get_cnf_mock.return_value.get.assert_called_once_with('password')
-        self.assertEqual(get_cnf_mock.return_value.get.return_value, password)
+        read_file_mock.assert_called_once_with(MySqlApp.get_client_auth_file(),
+                                               codec=MySqlApp.CFG_CODEC)
+        self.assertEqual("some password", password)
 
-    @patch.object(MySqlApp.configuration_manager, 'get_value',
-                  side_effect=RuntimeError('Error'))
-    def test_get_auth_password_error(self, get_cnf_mock):
-        self.assertRaises(RuntimeError, MySqlApp.get_auth_password)
+    @patch.object(operating_system, 'read_file',
+                  side_effect=RuntimeError('read_file error'))
+    def test_get_auth_password_error(self, _):
+        self.assertRaisesRegexp(RuntimeError, "read_file error",
+                                MySqlApp.get_auth_password)
 
     def test_service_discovery(self):
         with patch.object(os.path, 'isfile', return_value=True):
@@ -306,6 +305,8 @@ class MySqlAdminTest(testtools.TestCase):
         # trove.guestagent.common.configuration import ConfigurationManager
         dbaas.orig_configuration_manager = dbaas.MySqlApp.configuration_manager
         dbaas.MySqlApp.configuration_manager = Mock()
+        dbaas.orig_get_auth_password = dbaas.MySqlApp.get_auth_password
+        dbaas.MySqlApp.get_auth_password = Mock()
 
         self.mySqlAdmin = MySqlAdmin()
 
@@ -321,6 +322,8 @@ class MySqlAdminTest(testtools.TestCase):
             self.orig_MySQLUser_is_valid_user_name)
         dbaas.MySqlApp.configuration_manager = \
             dbaas.orig_configuration_manager
+        dbaas.MySqlApp.get_auth_password = \
+            dbaas.orig_get_auth_password
 
     def test__associate_dbs(self):
         db_result = [{"grantee": "'test_user'@'%'", "table_schema": "db1"},
@@ -999,20 +1002,19 @@ class MySqlAppTest(testtools.TestCase):
                   return_value='some_password')
     def test_reset_configuration(self, auth_pwd_mock):
         save_cfg_mock = Mock()
-        apply_mock = Mock()
+        save_auth_mock = Mock()
         wipe_ib_mock = Mock()
 
         configuration = {'config_contents': 'some junk'}
 
         self.mySqlApp.configuration_manager.save_configuration = save_cfg_mock
-        self.mySqlApp.configuration_manager.apply_system_override = apply_mock
+        self.mySqlApp._save_authentication_properties = save_auth_mock
         self.mySqlApp.wipe_ib_logfiles = wipe_ib_mock
         self.mySqlApp.reset_configuration(configuration=configuration)
 
         save_cfg_mock.assert_called_once_with('some junk')
-        apply_mock.assert_called_once_with(
-            {'client': {'user': dbaas_base.ADMIN_USER_NAME,
-                        'password': auth_pwd_mock.return_value}})
+        save_auth_mock.assert_called_once_with(
+            auth_pwd_mock.return_value)
         wipe_ib_mock.assert_called_once_with()
 
     @patch.object(utils, 'execute_with_timeout', return_value=('0', ''))
@@ -1295,6 +1297,16 @@ class MySqlAppTest(testtools.TestCase):
         self.assertTrue(pkg.Package.pkg_install.called)
         self.assert_reported_status(rd_instance.ServiceStatuses.NEW)
 
+    @patch.object(operating_system, 'write_file')
+    def test_save_authentication_properties(self, write_file_mock):
+        self.mySqlApp._save_authentication_properties("some_password")
+        write_file_mock.assert_called_once_with(
+            MySqlApp.get_client_auth_file(),
+            {'client': {'host': '127.0.0.1',
+                        'password': 'some_password',
+                        'user': dbaas_base.ADMIN_USER_NAME}},
+            codec=MySqlApp.CFG_CODEC)
+
     @patch.object(utils, 'generate_random_password',
                   return_value='some_password')
     def test_secure(self, auth_pwd_mock):
@@ -1416,18 +1428,16 @@ class MySqlAppTest(testtools.TestCase):
         self.assertFalse(self.mySqlApp.start_mysql.called)
         self.assert_reported_status(rd_instance.ServiceStatuses.NEW)
 
+    @patch.object(dbaas.MySqlApp, '_save_authentication_properties')
     @patch.object(dbaas, 'get_engine',
                   return_value=MagicMock(name='get_engine'))
-    def test_reset_admin_password(self, mock_engine):
+    def test_reset_admin_password(self, mock_engine, mock_save_auth):
         with patch.object(dbaas.MySqlApp, 'local_sql_client',
                           return_value=self.mock_client):
-            config_manager = self.mySqlApp.configuration_manager
-            config_manager.apply_system_override = Mock()
             self.mySqlApp._create_admin_user = Mock()
             self.mySqlApp.reset_admin_password("newpassword")
-            self.assertEqual(1,
-                             config_manager.apply_system_override.call_count)
             self.assertEqual(1, self.mySqlApp._create_admin_user.call_count)
+            mock_save_auth.assert_called_once_with("newpassword")
 
 
 class TextClauseMatcher(object):
@@ -1464,9 +1474,11 @@ class MySqlAppMockTest(testtools.TestCase):
         super(MySqlAppMockTest, self).tearDown()
         utils.execute_with_timeout = self.orig_utils_execute_with_timeout
 
+    @patch('trove.guestagent.common.configuration.ConfigurationManager'
+           '.refresh_cache')
     @patch.object(utils, 'generate_random_password',
                   return_value='some_password')
-    def test_secure_keep_root(self, auth_pwd_mock):
+    def test_secure_keep_root(self, auth_pwd_mock, _):
         mock_conn = mock_sql_connection()
 
         with patch.object(mock_conn, 'execute', return_value=None):
@@ -1489,9 +1501,11 @@ class MySqlAppMockTest(testtools.TestCase):
                 app._reset_configuration.assert_has_calls(reset_config_calls)
                 self.assertTrue(mock_conn.execute.called)
 
+    @patch('trove.guestagent.common.configuration.ConfigurationManager'
+           '.refresh_cache')
     @patch('trove.guestagent.datastore.mysql.service.MySqlApp'
            '.get_auth_password', return_value='some_password')
-    def test_secure_with_mycnf_error(self, auth_pwd_mock):
+    def test_secure_with_mycnf_error(self, auth_pwd_mock, _):
         mock_conn = mock_sql_connection()
 
         with patch.object(mock_conn, 'execute', return_value=None):
@@ -1569,7 +1583,9 @@ class MySqlRootStatusTest(testtools.TestCase):
             mock_conn.execute.assert_any_call(TextClauseMatcher(
                 'UPDATE mysql.user'))
 
-    def test_root_disable(self):
+    @patch.object(dbaas.MySqlApp, 'get_auth_password',
+                  return_value='some_password')
+    def test_root_disable(self, _):
         mock_conn = mock_sql_connection()
 
         with patch.object(mock_conn, 'execute', return_value=None):
@@ -1593,8 +1609,24 @@ class InterrogatorTest(testtools.TestCase):
         result = to_gb(123456789)
         self.assertEqual(0.11, result)
 
+    def test_to_gb_small(self):
+        result = to_gb(2)
+        self.assertEqual(0.01, result)
+
     def test_to_gb_zero(self):
         result = to_gb(0)
+        self.assertEqual(0.0, result)
+
+    def test_to_mb(self):
+        result = to_mb(123456789)
+        self.assertEqual(117.74, result)
+
+    def test_to_mb_small(self):
+        result = to_mb(2)
+        self.assertEqual(0.01, result)
+
+    def test_to_mb_zero(self):
+        result = to_mb(0)
         self.assertEqual(0.0, result)
 
     def test_get_filesystem_volume_stats(self):
@@ -2386,7 +2418,11 @@ class CassandraDBAppTest(testtools.TestCase):
                                      status=rd_instance.ServiceStatuses.NEW)
         self.appStatus = FakeAppStatus(self.FAKE_ID,
                                        rd_instance.ServiceStatuses.NEW)
-        self.cassandra = cass_service.CassandraApp(self.appStatus)
+        with patch.object(cass_service.CassandraApp, '_init_overrides_dir',
+                          return_value=''):
+            self.cassandra = cass_service.CassandraApp()
+            self.cassandra.status = self.appStatus
+
         self.service_discovery_patch = patch.object(
             operating_system, 'service_discovery',
             return_value={'cmd_start': 'start',
@@ -2516,23 +2552,6 @@ class CassandraDBAppTest(testtools.TestCase):
                           ['cassandra=1.2.10'])
 
         self.assert_reported_status(rd_instance.ServiceStatuses.NEW)
-
-    def test_cassandra_write_config(self):
-        conf_dict = {'key': 'some arbitrary configuration text'}
-        self._test_cassandra_write_config(conf_dict, False)
-        self._test_cassandra_write_config(yaml.dump(conf_dict), True)
-
-    @patch.multiple(operating_system, chmod=DEFAULT, chown=DEFAULT)
-    def _test_cassandra_write_config(self, data, is_raw, chmod, chown):
-        cassandra_conf = cass_system.CASSANDRA_CONF[operating_system.get_os()]
-        with patch('trove.guestagent.common.operating_system.%s'
-                   % ('write_file' if is_raw else 'write_yaml_file')) as write:
-            self.cassandra.write_config(data, is_raw=is_raw)
-            write.assert_called_once_with(cassandra_conf, data, as_root=True)
-            chown.assert_called_once_with(
-                cassandra_conf, 'cassandra', 'cassandra', as_root=True)
-            chmod.assert_called_with(cassandra_conf, FileMode.ADD_READ_ALL,
-                                     as_root=True)
 
 
 class CouchbaseAppTest(testtools.TestCase):

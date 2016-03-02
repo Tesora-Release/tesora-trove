@@ -18,10 +18,9 @@ import string
 
 from mock import ANY, call, DEFAULT, MagicMock, patch, NonCallableMagicMock
 from oslo_utils import netutils
-import testtools
 from testtools import ExpectedException
-from trove.common import exception
 
+from trove.common import exception
 from trove.common.instance import ServiceStatuses
 from trove.guestagent import backup
 from trove.guestagent.datastore.experimental.cassandra import (
@@ -34,12 +33,12 @@ from trove.guestagent import volume
 from trove.tests.unittests import trove_testtools
 
 
-class GuestAgentCassandraDBManagerTest(testtools.TestCase):
+class GuestAgentCassandraDBManagerTest(trove_testtools.TestCase):
 
     __MOUNT_POINT = '/var/lib/cassandra'
 
     __N_GAK = '_get_available_keyspaces'
-    __N_GSU = '_get_non_system_users'
+    __N_GLU = '_get_listed_users'
     __N_BU = '_build_user'
     __N_RU = '_rename_user'
     __N_AUP = '_alter_user_password'
@@ -59,14 +58,14 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
     __DROP_USR_FORMAT = "DROP USER '{}';"
     __GRANT_FORMAT = "GRANT {} ON KEYSPACE \"{}\" TO '{}';"
     __REVOKE_FORMAT = "REVOKE ALL PERMISSIONS ON KEYSPACE \"{}\" FROM '{}';"
-    __LIST_PERMISSIONS = (
-        "LIST ALL PERMISSIONS ON KEYSPACE \"{}\" "
-        "OF '{}' NORECURSIVE;"
-    )
+    __LIST_PERMISSIONS_FORMAT = "LIST ALL PERMISSIONS NORECURSIVE;"
+    __LIST_PERMISSIONS_OF_FORMAT = "LIST ALL PERMISSIONS OF '{}' NORECURSIVE;"
     __LIST_DB_FORMAT = "SELECT * FROM system.schema_keyspaces;"
     __LIST_USR_FORMAT = "LIST USERS;"
 
-    def setUp(self):
+    @patch.object(cass_service.CassandraApp, '_init_overrides_dir',
+                  return_value='')
+    def setUp(self, *args, **kwargs):
         super(GuestAgentCassandraDBManagerTest, self).setUp()
         self.real_status = cass_service.CassandraAppStatus.set_status
 
@@ -84,7 +83,6 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
             models.CassandraUser('Test'))
         self.admin = self.manager._Manager__admin
         self.pkg = cass_service.packager
-        self.real_db_app_status = cass_service.CassandraAppStatus
         self.origin_os_path_exists = os.path.exists
         self.origin_format = volume.VolumeDevice.format
         self.origin_migrate_data = volume.VolumeDevice.migrate_data
@@ -95,12 +93,11 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         self.origin_install_db = cass_service.CassandraApp._install_db
         self.original_get_ip = netutils.get_my_ipv4
         self.orig_make_host_reachable = (
-            cass_service.CassandraApp.make_host_reachable)
+            cass_service.CassandraApp.apply_initial_guestagent_configuration)
 
     def tearDown(self):
         super(GuestAgentCassandraDBManagerTest, self).tearDown()
         cass_service.packager = self.pkg
-        cass_service.CassandraAppStatus.set_status = self.real_db_app_status
         os.path.exists = self.origin_os_path_exists
         volume.VolumeDevice.format = self.origin_format
         volume.VolumeDevice.migrate_data = self.origin_migrate_data
@@ -110,12 +107,13 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         cass_service.CassandraApp.start_db = self.origin_start_db
         cass_service.CassandraApp._install_db = self.origin_install_db
         netutils.get_my_ipv4 = self.original_get_ip
-        cass_service.CassandraApp.make_host_reachable = (
+        cass_service.CassandraApp.apply_initial_guestagent_configuration = (
             self.orig_make_host_reachable)
+        cass_service.CassandraAppStatus.set_status = self.real_status
 
     def test_update_status(self):
         mock_status = MagicMock()
-        self.manager.appStatus = mock_status
+        self.manager.app.status = mock_status
         self.manager.update_status(self.context)
         mock_status.update.assert_any_call()
 
@@ -144,11 +142,14 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         restore.assert_called_once_with(
             self.context, backup_info, self.__MOUNT_POINT)
 
-    def test_superuser_password_reset(self):
+    @patch.object(cass_service.CassandraApp, '_init_overrides_dir',
+                  return_value='')
+    def test_admin_password_reset(self, _):
         fake_status = MagicMock()
         fake_status.is_running = False
 
-        test_app = cass_service.CassandraApp(fake_status)
+        test_app = cass_service.CassandraApp()
+        test_app.status = fake_status
         with patch.multiple(
                 test_app,
                 start_db=DEFAULT,
@@ -160,10 +161,10 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
                 _CassandraApp__enable_remote_access=DEFAULT,
                 _CassandraApp__disable_authentication=DEFAULT,
                 _CassandraApp__enable_authentication=DEFAULT,
-                _CassandraApp__reset_superuser_password=DEFAULT,
-                configure_superuser_access=DEFAULT) as calls:
+                _CassandraApp__reset_user_password_to_default=DEFAULT,
+                secure=DEFAULT) as calls:
 
-            test_app._reset_superuser_password()
+            test_app._reset_admin_password()
 
             calls['_disable_db_on_boot'].assert_called_once_with()
             calls[
@@ -176,22 +177,28 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
             calls[
                 '_CassandraApp__enable_authentication'
             ].assert_called_once_with()
-            calls[
-                '_CassandraApp__reset_superuser_password'
-            ].assert_called_once_with()
-            calls['configure_superuser_access'].assert_called_once_with()
-            self.assertEqual(2, calls['restart'].call_count)
+
+            pw_reset_mock = calls[
+                '_CassandraApp__reset_user_password_to_default'
+            ]
+            pw_reset_mock.assert_called_once_with(test_app._ADMIN_USER)
+            calls['secure'].assert_called_once_with(
+                update_user=pw_reset_mock.return_value)
+            calls['restart'].assert_called_once_with()
             calls['stop_db'].assert_called_once_with()
             calls[
                 '_CassandraApp__enable_remote_access'
             ].assert_called_once_with()
             calls['_enable_db_on_boot'].assert_called_once_with()
 
-    def test_change_cluster_name(self):
+    @patch.object(cass_service.CassandraApp, '_init_overrides_dir',
+                  return_value='')
+    def test_change_cluster_name(self, _):
         fake_status = MagicMock()
         fake_status.is_running = True
 
-        test_app = cass_service.CassandraApp(fake_status)
+        test_app = cass_service.CassandraApp()
+        test_app.status = fake_status
         with patch.multiple(
                 test_app,
                 start_db=DEFAULT,
@@ -208,25 +215,28 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
                 sample_name)
             calls['restart'].assert_called_once_with()
 
+    @patch.object(cass_service.CassandraApp, '_init_overrides_dir',
+                  return_value='')
     @patch.object(cass_service, 'CONF', DEFAULT)
-    def test_apply_post_restore_updates(self, conf_mock):
+    def test_apply_post_restore_updates(self, conf_mock, _):
         fake_status = MagicMock()
         fake_status.is_running = False
 
-        test_app = cass_service.CassandraApp(fake_status)
+        test_app = cass_service.CassandraApp()
+        test_app.status = fake_status
         with patch.multiple(
                 test_app,
                 start_db=DEFAULT,
                 stop_db=DEFAULT,
                 _update_cluster_name_property=DEFAULT,
-                _reset_superuser_password=DEFAULT,
+                _reset_admin_password=DEFAULT,
                 change_cluster_name=DEFAULT) as calls:
             backup_info = {'instance_id': 'old_id'}
             conf_mock.guest_id = 'new_id'
             test_app._apply_post_restore_updates(backup_info)
             calls['_update_cluster_name_property'].assert_called_once_with(
                 'old_id')
-            calls['_reset_superuser_password'].assert_called_once_with()
+            calls['_reset_admin_password'].assert_called_once_with()
             calls['start_db'].assert_called_once_with(update_db=False)
             calls['change_cluster_name'].assert_called_once_with('new_id')
             calls['stop_db'].assert_called_once_with()
@@ -236,14 +246,14 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
                          is_db_installed=True, backup_info=None,
                          is_root_enabled=False,
                          overrides=None):
+
         mock_status = MagicMock()
         mock_app = MagicMock()
-        self.manager.appStatus = mock_status
-        self.manager.app = mock_app
+        mock_app.status = mock_status
+        self.manager._app = mock_app
 
         mock_status.begin_install = MagicMock(return_value=None)
         mock_app.install_if_needed = MagicMock(return_value=None)
-        pkg.Package.pkg_is_installed = MagicMock(return_value=is_db_installed)
         mock_app.init_storage_structure = MagicMock(return_value=None)
         mock_app.write_config = MagicMock(return_value=None)
         mock_app.apply_initial_guestagent_configuration = MagicMock(
@@ -257,23 +267,27 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         volume.VolumeDevice.migrate_data = MagicMock(return_value=None)
         volume.VolumeDevice.mount = MagicMock(return_value=None)
         volume.VolumeDevice.mount_points = MagicMock(return_value=[])
-        # invocation
-        self.manager.prepare(context=self.context, packages=packages,
-                             config_contents=config_content,
-                             databases=None,
-                             memory_mb='2048', users=None,
-                             device_path=device_path,
-                             mount_point=self.__MOUNT_POINT,
-                             backup_info=backup_info,
-                             overrides=None,
-                             cluster_config=None)
+
+        with patch.object(pkg.Package, 'pkg_is_installed',
+                          return_value=is_db_installed):
+            # invocation
+            self.manager.prepare(context=self.context, packages=packages,
+                                 config_contents=config_content,
+                                 databases=None,
+                                 memory_mb='2048', users=None,
+                                 device_path=device_path,
+                                 mount_point=self.__MOUNT_POINT,
+                                 backup_info=backup_info,
+                                 overrides=None,
+                                 cluster_config=None)
 
         # verification/assertion
         mock_status.begin_install.assert_any_call()
         mock_app.install_if_needed.assert_any_call(packages)
         mock_app._remove_system_tables.assert_any_call()
         mock_app.init_storage_structure.assert_any_call('/var/lib/cassandra')
-        mock_app.apply_initial_guestagent_configuration.assert_any_call()
+        mock_app.apply_initial_guestagent_configuration.assert_any_call(
+            cluster_name=None)
         mock_app.start_db.assert_any_call(update_db=False)
         mock_app.stop_db.assert_any_call()
         if backup_info:
@@ -435,30 +449,115 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
             found = self.manager.list_databases(self.context)
             self.assertEqual(([], None), found)
 
+    def test_get_acl(self):
+        r0 = NonCallableMagicMock(username='user1', resource='<all keyspaces>',
+                                  permission='SELECT')
+        r1 = NonCallableMagicMock(username='user2', resource='<keyspace ks1>',
+                                  permission='SELECT')
+        r2 = NonCallableMagicMock(username='user2', resource='<keyspace ks2>',
+                                  permission='SELECT')
+        r3 = NonCallableMagicMock(username='user2', resource='<keyspace ks2>',
+                                  permission='ALTER')
+        r4 = NonCallableMagicMock(username='user3', resource='<table ks2.t1>',
+                                  permission='SELECT')
+        r5 = NonCallableMagicMock(username='user3', resource='',
+                                  permission='ALTER')
+        r6 = NonCallableMagicMock(username='user3', resource='<keyspace ks2>',
+                                  permission='')
+        r7 = NonCallableMagicMock(username='user3', resource='',
+                                  permission='')
+        r8 = NonCallableMagicMock(username='user3', resource='<keyspace ks1>',
+                                  permission='DELETE')
+        r9 = NonCallableMagicMock(username='user4', resource='<all keyspaces>',
+                                  permission='UPDATE')
+        r10 = NonCallableMagicMock(username='user4', resource='<keyspace ks1>',
+                                   permission='DELETE')
+
+        available_ks = {models.CassandraSchema('ks1'),
+                        models.CassandraSchema('ks2'),
+                        models.CassandraSchema('ks3')}
+
+        mock_result_set = [r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r9, r9, r10]
+        execute_mock = MagicMock(return_value=mock_result_set)
+        mock_client = MagicMock(execute=execute_mock)
+
+        with patch.object(self.admin,
+                          self.__N_GAK, return_value=available_ks) as gak_mock:
+            acl = self.admin._get_acl(mock_client)
+            execute_mock.assert_called_once_with(
+                self.__LIST_PERMISSIONS_FORMAT)
+            gak_mock.assert_called_once_with(mock_client)
+
+            self.assertEqual({'user1': {'ks1': {'SELECT'},
+                                        'ks2': {'SELECT'},
+                                        'ks3': {'SELECT'}},
+                              'user2': {'ks1': {'SELECT'},
+                                        'ks2': {'SELECT', 'ALTER'}},
+                              'user3': {'ks1': {'DELETE'}},
+                              'user4': {'ks1': {'UPDATE', 'DELETE'},
+                                        'ks2': {'UPDATE'},
+                                        'ks3': {'UPDATE'}}
+                              },
+                             acl)
+
+        mock_result_set = [r1, r2, r3]
+        execute_mock = MagicMock(return_value=mock_result_set)
+        mock_client = MagicMock(execute=execute_mock)
+
+        with patch.object(self.admin,
+                          self.__N_GAK, return_value=available_ks) as gak_mock:
+            acl = self.admin._get_acl(mock_client, username='user2')
+            execute_mock.assert_called_once_with(
+                self.__LIST_PERMISSIONS_OF_FORMAT.format('user2'))
+            gak_mock.assert_not_called()
+
+            self.assertEqual({'user2': {'ks1': {'SELECT'},
+                                        'ks2': {'SELECT', 'ALTER'}}}, acl)
+
+        mock_result_set = []
+        execute_mock = MagicMock(return_value=mock_result_set)
+        mock_client = MagicMock(execute=execute_mock)
+
+        with patch.object(self.admin,
+                          self.__N_GAK, return_value=available_ks) as gak_mock:
+            acl = self.admin._get_acl(mock_client, username='nonexisting')
+            execute_mock.assert_called_once_with(
+                self.__LIST_PERMISSIONS_OF_FORMAT.format('nonexisting'))
+            gak_mock.assert_not_called()
+
+            self.assertEqual({}, acl)
+
     @patch.object(cass_service.CassandraLocalhostConnection, '__enter__')
-    def test_get_non_system_users(self, conn):
-        usr = models.CassandraUser(self._get_random_name(1025), 'password')
+    def test_get_listed_users(self, conn):
+        usr1 = models.CassandraUser(self._get_random_name(1025))
+        usr2 = models.CassandraUser(self._get_random_name(1025))
+        usr3 = models.CassandraUser(self._get_random_name(1025))
         db1 = models.CassandraSchema('db1')
         db2 = models.CassandraSchema('db2')
-        usr.databases.append(db1.serialize())
-        usr.databases.append(db2.serialize())
+        usr1.databases.append(db1.serialize())
+        usr3.databases.append(db2.serialize())
 
         rv_1 = NonCallableMagicMock()
-        rv_1.configure_mock(name=usr.name, super=False)
+        rv_1.configure_mock(name=usr1.name, super=False)
         rv_2 = NonCallableMagicMock()
-        rv_2.configure_mock(keyspace_name=db1.name)
+        rv_2.configure_mock(name=usr2.name, super=False)
         rv_3 = NonCallableMagicMock()
-        rv_3.configure_mock(keyspace_name=db2.name)
+        rv_3.configure_mock(name=usr3.name, super=True)
 
         with patch.object(conn.return_value, 'execute', return_value=iter(
                 [rv_1, rv_2, rv_3])):
-            self.manager.list_users(self.context)
-            conn.return_value.execute.assert_has_calls([
-                call(self.__LIST_USR_FORMAT),
-                call(self.__LIST_DB_FORMAT),
-                call(self.__LIST_PERMISSIONS, (db1.name, usr.name)),
-                call(self.__LIST_PERMISSIONS, (db2.name, usr.name))
-            ], any_order=True)
+            with patch.object(self.admin, '_get_acl',
+                              return_value={usr1.name: {db1.name: {'SELECT'},
+                                                        db2.name: {}},
+                                            usr3.name: {db2.name: {'SELECT'}}}
+                              ):
+                usrs = self.manager.list_users(self.context)
+                conn.return_value.execute.assert_has_calls([
+                    call(self.__LIST_USR_FORMAT),
+                ], any_order=True)
+                self.assertIn(usr1.serialize(), usrs[0])
+                self.assertIn(usr2.serialize(), usrs[0])
+                self.assertIn(usr3.serialize(), usrs[0])
 
     @patch.object(cass_service.CassandraLocalhostConnection, '__enter__')
     def test_list_access(self, conn):
@@ -471,7 +570,7 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         usr3.databases.append(db1)
         usr3.databases.append(db2)
 
-        with patch.object(self.admin, self.__N_GSU, return_value={usr1, usr2,
+        with patch.object(self.admin, self.__N_GLU, return_value={usr1, usr2,
                                                                   usr3}):
             usr1_dbs = self.manager.list_access(self.context, usr1.name, None)
             usr2_dbs = self.manager.list_access(self.context, usr2.name, None)
@@ -480,7 +579,7 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
             self.assertEqual([db1], usr2_dbs)
             self.assertEqual([db1, db2], usr3_dbs)
 
-        with patch.object(self.admin, self.__N_GSU, return_value=set()):
+        with patch.object(self.admin, self.__N_GLU, return_value=set()):
             with ExpectedException(exception.UserNotFound):
                 self.manager.list_access(self.context, usr3.name, None)
 
@@ -490,7 +589,7 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         usr2 = models.CassandraUser('usr2')
         usr3 = models.CassandraUser(self._get_random_name(1025), 'password')
 
-        with patch.object(self.admin, self.__N_GSU, return_value={usr1, usr2,
+        with patch.object(self.admin, self.__N_GLU, return_value={usr1, usr2,
                                                                   usr3}):
             found = self.manager.list_users(self.context)
             self.assertEqual(2, len(found))
@@ -500,7 +599,7 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
             self.assertIn(usr2.serialize(), found[0])
             self.assertIn(usr3.serialize(), found[0])
 
-        with patch.object(self.admin, self.__N_GSU, return_value=set()):
+        with patch.object(self.admin, self.__N_GLU, return_value=set()):
             self.assertEqual(([], None), self.manager.list_users(self.context))
 
     @patch.object(cass_service.CassandraLocalhostConnection, '__enter__')
@@ -509,14 +608,14 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
         usr2 = models.CassandraUser('usr2')
         usr3 = models.CassandraUser(self._get_random_name(1025), 'password')
 
-        with patch.object(self.admin, self.__N_GSU, return_value={usr1, usr2,
+        with patch.object(self.admin, self.__N_GLU, return_value={usr1, usr2,
                                                                   usr3}):
             found = self.manager.get_user(self.context, usr2.name, None)
             self.assertEqual(usr2.serialize(), found)
 
-        with patch.object(self.admin, self.__N_GSU, return_value=set()):
-            with ExpectedException(exception.UserNotFound):
-                self.manager.get_user(self.context, usr2.name, None)
+        with patch.object(self.admin, self.__N_GLU, return_value=set()):
+            self.assertIsNone(
+                self.manager.get_user(self.context, usr2.name, None))
 
     @patch.object(cass_service.CassandraAdmin, '_deserialize_keyspace',
                   side_effect=lambda p1: p1)
@@ -608,50 +707,3 @@ class GuestAgentCassandraDBManagerTest(testtools.TestCase):
                                                    None, usr_attrs)
                     alter.assert_called_once_with(ANY, usr)
                     self.assertEqual(0, rename.call_count)
-
-    def test_update_dict(self):
-        data = {'rpc_address': "0.0.0.0",
-                'broadcast_rpc_address': '0.0.0.0',
-                'listen_address': '0.0.0.0',
-                'seed_provider': [{
-                    'class_name':
-                    'org.apache.cassandra.locator.SimpleSeedProvider',
-                    'parameters': [{'seeds': '0.0.0.0'}]}]
-                }
-
-        updates = {'rpc_address': "127.0.0.1",
-                   'seed_provider': {'parameters':
-                                     {'seeds': '127.0.0.1'}
-                                     }
-                   }
-
-        updated = self.manager.app._update_dict(updates, data)
-
-        expected = {'rpc_address': "127.0.0.1",
-                    'broadcast_rpc_address': '0.0.0.0',
-                    'listen_address': '0.0.0.0',
-                    'seed_provider': [{
-                        'class_name':
-                        'org.apache.cassandra.locator.SimpleSeedProvider',
-                        'parameters': [{'seeds': '127.0.0.1'}]}]
-                    }
-
-        self.assertEqual(expected, updated)
-
-        updates = {'seed_provider':
-                   [{'class_name':
-                     'org.apache.cassandra.locator.SimpleSeedProvider'
-                     }]
-                   }
-
-        updated = self.manager.app._update_dict(updates, data)
-
-        expected = {'rpc_address': "127.0.0.1",
-                    'broadcast_rpc_address': '0.0.0.0',
-                    'listen_address': '0.0.0.0',
-                    'seed_provider': [{
-                        'class_name':
-                        'org.apache.cassandra.locator.SimpleSeedProvider'}]
-                    }
-
-        self.assertEqual(expected, updated)

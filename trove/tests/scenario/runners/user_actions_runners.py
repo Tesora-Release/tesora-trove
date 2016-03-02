@@ -13,10 +13,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from proboscis import asserts
+import urllib
+
+from proboscis import SkipTest
 
 from trove.tests.scenario.runners.test_runners import TestRunner
 from troveclient.compat import exceptions
+from troveclient.openstack.common.apiclient.exceptions import ValidationError
 
 
 class UserActionsRunner(TestRunner):
@@ -27,19 +30,27 @@ class UserActionsRunner(TestRunner):
     # likely require replacing GA casts with calls which I believe are
     # more appropriate anyways.
 
+    def __init__(self):
+        super(UserActionsRunner, self).__init__()
+        self.user_defs = []
+
+    @property
+    def first_user_def(self):
+        if self.user_defs:
+            return self.user_defs[0]
+        raise SkipTest("No valid user definitions provided.")
+
     def run_users_create(self, expected_http_code=202):
-        users = [{'name': 'nodbguy', 'password': 'password1',
-                  'databases': []},
-                 {'name': 'singledbguy', 'password': 'password1',
-                  'databases': [{'name': 'db1'}]},
-                 {'name': 'multidbguy', 'password': 'password1',
-                  'databases': [{'name': 'db1', 'name': 'db2'}]}]
-        self.user_defs = self.assert_users_create(
-            self.instance_info.id, users, expected_http_code)
+        users = self.test_helper.get_valid_user_definitions()
+        if users:
+            self.user_defs = self.assert_users_create(
+                self.instance_info.id, users, expected_http_code)
+        else:
+            raise SkipTest("No valid user definitions provided.")
 
     def assert_users_create(self, instance_id, serial_users_def,
                             expected_http_code):
-        self.rd_client.users.create(instance_id, serial_users_def)
+        self.auth_client.users.create(instance_id, serial_users_def)
         self.assert_client_code(expected_http_code)
         return serial_users_def
 
@@ -51,16 +62,20 @@ class UserActionsRunner(TestRunner):
     def assert_user_show(self, instance_id, expected_user_def,
                          expected_http_code):
         user_name = expected_user_def['name']
-        queried_user = self.rd_client.users.get(instance_id, user_name, '%')
+        user_host = expected_user_def.get('host')
+
+        queried_user = self.auth_client.users.get(
+            instance_id, user_name, user_host)
         self.assert_client_code(expected_http_code)
         self._assert_user_matches(queried_user, expected_user_def)
 
     def _assert_user_matches(self, user, expected_user_def):
         user_name = expected_user_def['name']
-        asserts.assert_equal(user.name, expected_user_def['name'],
-                             "Mismatch of names for user: %s" % user_name)
-        asserts.assert_equal(user.databases, expected_user_def['databases'],
-                             "Mismatch of databases for user: %s" % user_name)
+        self.assert_equal(expected_user_def['name'], user.name,
+                          "Mismatch of names for user: %s" % user_name)
+        self.assert_list_elements_equal(
+            expected_user_def['databases'], user.databases,
+            "Mismatch of databases for user: %s" % user_name)
 
     def run_users_list(self, expected_http_code=200):
         self.assert_users_list(
@@ -68,15 +83,15 @@ class UserActionsRunner(TestRunner):
 
     def assert_users_list(self, instance_id, expected_user_defs,
                           expected_http_code, limit=2):
-        full_list = self.rd_client.users.list(instance_id)
+        full_list = self.auth_client.users.list(instance_id)
         self.assert_client_code(expected_http_code)
         listed_users = {user.name: user for user in full_list}
-        asserts.assert_is_none(full_list.next,
-                               "Unexpected pagination in the list.")
+        self.assert_is_none(full_list.next,
+                            "Unexpected pagination in the list.")
 
         for user_def in expected_user_defs:
             user_name = user_def['name']
-            asserts.assert_true(
+            self.assert_true(
                 user_name in listed_users,
                 "User not included in the 'user-list' output: %s" %
                 user_name)
@@ -84,61 +99,80 @@ class UserActionsRunner(TestRunner):
 
         # Check that the system (ignored) users are not included in the output.
         system_users = self.get_system_users()
-        asserts.assert_false(
+        self.assert_false(
             any(name in listed_users for name in system_users),
             "System users should not be included in the 'user-list' output.")
 
         # Test list pagination.
-        list_page = self.rd_client.users.list(instance_id, limit=limit)
+        list_page = self.auth_client.users.list(instance_id, limit=limit)
         self.assert_client_code(expected_http_code)
 
-        asserts.assert_true(len(list_page) <= limit)
-        asserts.assert_is_not_none(list_page.next, "List page is missing.")
+        self.assert_true(len(list_page) <= limit)
+        if len(full_list) > limit:
+            self.assert_is_not_none(list_page.next, "List page is missing.")
+        else:
+            self.assert_is_none(list_page.next, "An extra page in the list.")
         marker = list_page.next
 
         self.assert_pagination_match(list_page, full_list, 0, limit)
-        self.assert_pagination_match(
-            list_page[-1:], full_list, limit - 1, limit)
+        if marker:
+            last_user = list_page[-1]
+            expected_marker = self.as_pagination_marker(last_user)
+            self.assert_equal(expected_marker, marker,
+                              "Pagination marker should be the last element "
+                              "in the page.")
+            list_page = self.auth_client.users.list(instance_id, marker=marker)
+            self.assert_client_code(expected_http_code)
+            self.assert_pagination_match(
+                list_page, full_list, limit, len(full_list))
 
-        list_page = self.rd_client.users.list(instance_id, marker=marker)
-        self.assert_client_code(expected_http_code)
-        self.assert_pagination_match(
-            list_page, full_list, limit, len(full_list))
+    def as_pagination_marker(self, user):
+        return urllib.quote(user.name)
 
-    def run_negative_user_create(
+    def run_user_create_with_no_attributes(
             self, expected_exception=exceptions.BadRequest,
             expected_http_code=400):
-        # Test with no attribites.
         self.assert_users_create_failure(
             self.instance_info.id, {}, expected_exception, expected_http_code)
 
+    def run_user_create_with_blank_name(
+            self, expected_exception=exceptions.BadRequest,
+            expected_http_code=400):
+        usr_def = self.test_helper.get_non_existing_user_definition()
         # Test with missing user name attribute.
+        no_name_usr_def = self.copy_dict(usr_def, ignored_keys=['name'])
         self.assert_users_create_failure(
-            self.instance_info.id,
-            {'password': 'password1', 'databases': []},
+            self.instance_info.id, no_name_usr_def,
             expected_exception, expected_http_code)
 
         # Test with empty user name attribute.
+        blank_name_usr_def = self.copy_dict(usr_def)
+        blank_name_usr_def.update({'name': ''})
         self.assert_users_create_failure(
-            self.instance_info.id,
-            {'name': '', 'password': 'password1', 'databases': []},
+            self.instance_info.id, blank_name_usr_def,
             expected_exception, expected_http_code)
 
+    def run_user_create_with_blank_password(
+            self, expected_exception=exceptions.BadRequest,
+            expected_http_code=400):
+        usr_def = self.test_helper.get_non_existing_user_definition()
         # Test with missing password attribute.
+        no_pass_usr_def = self.copy_dict(usr_def, ignored_keys=['password'])
         self.assert_users_create_failure(
-            self.instance_info.id,
-            {'name': 'nopassguy', 'databases': []},
+            self.instance_info.id, no_pass_usr_def,
             expected_exception, expected_http_code)
 
         # Test with missing databases attribute.
+        no_db_usr_def = self.copy_dict(usr_def, ignored_keys=['databases'])
         self.assert_users_create_failure(
-            self.instance_info.id,
-            {'name': 'nodbguy', 'password': 'password1'},
+            self.instance_info.id, no_db_usr_def,
             expected_exception, expected_http_code)
 
-        # Test creating an existing user.
+    def run_existing_user_create(
+            self, expected_exception=exceptions.BadRequest,
+            expected_http_code=400):
         self.assert_users_create_failure(
-            self.instance_info.id, self.user_defs[0],
+            self.instance_info.id, self.first_user_def,
             expected_exception, expected_http_code)
 
     def run_system_user_create(
@@ -149,48 +183,52 @@ class UserActionsRunner(TestRunner):
         # confusing (talking about a malformed request).
         system_users = self.get_system_users()
         if system_users:
-            for name in system_users:
-                user_def = {'name': name, 'password': 'password1',
-                            'databases': []}
-                self.assert_users_create_failure(
-                    self.instance_info.id, user_def,
-                    expected_exception, expected_http_code)
+            user_defs = [{'name': name, 'password': 'password1',
+                          'databases': []} for name in system_users]
+            self.assert_users_create_failure(
+                self.instance_info.id, user_defs,
+                expected_exception, expected_http_code)
 
     def assert_users_create_failure(
             self, instance_id, serial_users_def,
             expected_exception, expected_http_code):
         self.assert_raises(
             expected_exception, expected_http_code,
-            self.rd_client.users.create, instance_id, serial_users_def)
+            self.auth_client.users.create, instance_id, serial_users_def)
 
-    def run_negative_user_attribute_update(
-            self, expected_exception=exceptions.BadRequest,
-            expected_http_code=400):
-        # Test some basic invalid attributes on an existing user.
-
-        # Test with no attribites.
+    def run_user_update_with_no_attributes(self):
         # Note: this is caught on the client-side.
         self.assert_user_attribute_update_failure(
-            self.instance_info.id, 'nodbguy', {}, Exception, None)
+            self.instance_info.id, self.first_user_def,
+            {}, ValidationError, None)
 
-        # Test with empty user name.
+    def run_user_update_with_blank_name(
+            self, expected_exception=exceptions.BadRequest,
+            expected_http_code=400):
         self.assert_user_attribute_update_failure(
-            self.instance_info.id, 'nodbguy', {'name': ''},
+            self.instance_info.id, self.first_user_def, {'name': ''},
             expected_exception, expected_http_code)
 
-        # Test updating an existing user with a conflicting name.
+    def run_user_update_with_existing_name(
+            self, expected_exception=exceptions.BadRequest,
+            expected_http_code=400):
         self.assert_user_attribute_update_failure(
-            self.instance_info.id, self.user_defs[0]['name'],
-            {'name': self.user_defs[1]['name']},
+            self.instance_info.id, self.first_user_def,
+            {'name': self.first_user_def['name']},
             expected_exception, expected_http_code)
 
     def assert_user_attribute_update_failure(
-            self, instance_id, user_name, update_attribites,
+            self, instance_id, user_def, update_attribites,
             expected_exception, expected_http_code):
+        user_name, user_host = self._get_user_name_host_pair(user_def)
+
         self.assert_raises(
             expected_exception, expected_http_code,
-            self.rd_client.users.update_attributes, instance_id,
-            user_name, update_attribites)
+            self.auth_client.users.update_attributes, instance_id,
+            user_name, update_attribites, user_host)
+
+    def _get_user_name_host_pair(self, user_def):
+        return user_def['name'], user_def.get('host')
 
     def run_system_user_attribute_update(
             self, expected_exception=exceptions.BadRequest,
@@ -201,21 +239,27 @@ class UserActionsRunner(TestRunner):
         system_users = self.get_system_users()
         if system_users:
             for name in system_users:
-                update_attribites = {'name': name, 'password': 'password2'}
+                user_def = {'name': name, 'password': 'password2'}
                 self.assert_user_attribute_update_failure(
-                    self.instance_info.id, name, update_attribites,
+                    self.instance_info.id, user_def, user_def,
                     expected_exception, expected_http_code)
 
     def run_user_attribute_update(self, expected_http_code=202):
-        update_attribites = {'name': 'dblessguy', 'password': 'password2'}
+        updated_def = self.first_user_def
+        # Update the name by appending a random string to it.
+        updated_name = ''.join([updated_def['name'], 'upd'])
+        update_attribites = {'name': updated_name,
+                             'password': 'password2'}
         self.assert_user_attribute_update(
-            self.instance_info.id, 'nodbguy', update_attribites,
-            expected_http_code)
+            self.instance_info.id, updated_def,
+            update_attribites, expected_http_code)
 
-    def assert_user_attribute_update(self, instance_id, user_name,
+    def assert_user_attribute_update(self, instance_id, user_def,
                                      update_attribites, expected_http_code):
-        self.rd_client.users.update_attributes(
-            instance_id, user_name, update_attribites)
+        user_name, user_host = self._get_user_name_host_pair(user_def)
+
+        self.auth_client.users.update_attributes(
+            instance_id, user_name, update_attribites, user_host)
         self.assert_client_code(expected_http_code)
 
         # Update the stored definitions with the new value.
@@ -232,31 +276,37 @@ class UserActionsRunner(TestRunner):
     def run_user_delete(self, expected_http_code=202):
         for user_def in self.user_defs:
             self.assert_user_delete(
-                self.instance_info.id, user_def['name'], expected_http_code)
+                self.instance_info.id, user_def, expected_http_code)
 
-    def assert_user_delete(self, instance_id, user_name, expected_http_code):
-        self.rd_client.users.delete(instance_id, user_name)
+    def assert_user_delete(self, instance_id, user_def, expected_http_code):
+        user_name, user_host = self._get_user_name_host_pair(user_def)
+
+        self.auth_client.users.delete(instance_id, user_name, user_host)
         self.assert_client_code(expected_http_code)
 
         self.assert_raises(exceptions.NotFound, 404,
-                           self.rd_client.users.get,
-                           instance_id, user_name, '%')
+                           self.auth_client.users.get,
+                           instance_id, user_name, user_host)
 
-        for user in self.rd_client.users.list(instance_id):
+        for user in self.auth_client.users.list(instance_id):
             if user.name == user_name:
-                asserts.fail("User still listed after delete: %s" % user_name)
+                self.fail("User still listed after delete: %s" % user_name)
 
     def run_nonexisting_user_show(
             self, expected_exception=exceptions.NotFound,
             expected_http_code=404):
-        self.assert_user_show_failure(self.instance_info.id, 'nonexistingusr',
-                                      expected_exception, expected_http_code)
+        usr_def = self.test_helper.get_non_existing_user_definition()
+        self.assert_user_show_failure(
+            self.instance_info.id, {'name': usr_def['name']},
+            expected_exception, expected_http_code)
 
-    def assert_user_show_failure(self, instance_id, user_name,
+    def assert_user_show_failure(self, instance_id, user_def,
                                  expected_exception, expected_http_code):
+        user_name, user_host = self._get_user_name_host_pair(user_def)
+
         self.assert_raises(
             expected_exception, expected_http_code,
-            self.rd_client.users.get, instance_id, user_name, '%')
+            self.auth_client.users.get, instance_id, user_name, user_host)
 
     def run_system_user_show(
             self, expected_exception=exceptions.BadRequest,
@@ -268,27 +318,33 @@ class UserActionsRunner(TestRunner):
         if system_users:
             for name in system_users:
                 self.assert_user_show_failure(
-                    self.instance_info.id, name,
+                    self.instance_info.id, {'name': name},
                     expected_exception, expected_http_code)
 
     def run_nonexisting_user_update(self, expected_http_code=404):
         # Test valid update on a non-existing user.
+        usr_def = self.test_helper.get_non_existing_user_definition()
+        update_def = {'name': usr_def['name']}
         self.assert_user_attribute_update_failure(
-            self.instance_info.id, 'nonexistingusr', {'name': 'justashadow'},
+            self.instance_info.id, update_def, update_def,
             exceptions.NotFound, expected_http_code)
 
     def run_nonexisting_user_delete(
             self, expected_exception=exceptions.NotFound,
             expected_http_code=404):
-        self.assert_user_delete_failure(self.instance_info.id, 'justashadow',
-                                        expected_exception, expected_http_code)
+        usr_def = self.test_helper.get_non_existing_user_definition()
+        self.assert_user_delete_failure(
+            self.instance_info.id, {'name': usr_def['name']},
+            expected_exception, expected_http_code)
 
     def assert_user_delete_failure(
-            self, instance_id, user_name,
+            self, instance_id, user_def,
             expected_exception, expected_http_code):
+        user_name, user_host = self._get_user_name_host_pair(user_def)
+
         self.assert_raises(expected_exception, expected_http_code,
-                           self.rd_client.users.delete,
-                           instance_id, user_name)
+                           self.auth_client.users.delete,
+                           instance_id, user_name, user_host)
 
     def run_system_user_delete(
             self, expected_exception=exceptions.BadRequest,
@@ -300,8 +356,26 @@ class UserActionsRunner(TestRunner):
         if system_users:
             for name in system_users:
                 self.assert_user_delete_failure(
-                    self.instance_info.id, name,
+                    self.instance_info.id, {'name': name},
                     expected_exception, expected_http_code)
 
     def get_system_users(self):
         return self.get_datastore_config_property('ignore_users')
+
+
+class MysqlUserActionsRunner(UserActionsRunner):
+
+    def as_pagination_marker(self, user):
+        return urllib.quote('%s@%s' % (user.name, user.host))
+
+
+class MariadbUserActionsRunner(MysqlUserActionsRunner):
+
+    def __init__(self):
+        super(MariadbUserActionsRunner, self).__init__()
+
+
+class PerconaUserActionsRunner(MysqlUserActionsRunner):
+
+    def __init__(self):
+        super(PerconaUserActionsRunner, self).__init__()
