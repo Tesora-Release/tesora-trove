@@ -19,6 +19,7 @@ from trove.cluster import models
 from trove.cluster.tasks import ClusterTasks
 from trove.cluster.views import ClusterView
 from trove.common import cfg
+from trove.common import server_group as srv_grp
 from trove.common.strategies.cluster import base
 from trove.common.strategies.cluster.experimental.couchbase.taskmanager import(
     CouchbaseClusterTasks)
@@ -77,10 +78,11 @@ class CouchbaseAPIStrategy(base.BaseAPIStrategy):
 class CouchbaseCluster(models.Cluster):
 
     DEFAULT_SERVICES = "data"
+    MAX_PASSWORD_LEN = 24
 
     @classmethod
     def create(cls, context, name, datastore, datastore_version,
-               instances, extended_properties):
+               instances, extended_properties, locality):
         LOG.debug("Processing a request for creating a new cluster.")
 
         # Updating Cluster Task.
@@ -91,7 +93,8 @@ class CouchbaseCluster(models.Cluster):
 
         cls._create_cluster_instances(
             context, db_info.id, db_info.name,
-            datastore, datastore_version, instances, extended_properties)
+            datastore, datastore_version, instances, extended_properties,
+            locality)
 
         # Calling taskmanager to further proceed for cluster-configuration.
         task_api.load(context, datastore_version.manager).create_cluster(
@@ -102,7 +105,8 @@ class CouchbaseCluster(models.Cluster):
     @classmethod
     def _create_cluster_instances(
             cls, context, cluster_id, cluster_name,
-            datastore, datastore_version, instances, extended_properties=None):
+            datastore, datastore_version, instances, extended_properties,
+            locality):
         LOG.debug("Processing a request for new cluster instances.")
 
         cluster_node_ids = CouchbaseClusterTasks.find_cluster_node_ids(
@@ -132,7 +136,8 @@ class CouchbaseCluster(models.Cluster):
 
             cluster_password = coordinator['guest'].get_cluster_password()
         else:
-            cluster_password = utils.generate_random_password()
+            pwd_len = min(cls.MAX_PASSWORD_LEN, CONF.default_password_length)
+            cluster_password = utils.generate_random_password(pwd_len)
 
         models.assert_homogeneous_cluster(
             instances,
@@ -182,7 +187,8 @@ class CouchbaseCluster(models.Cluster):
                 nics=instance.get('nics', None),
                 availability_zone=instance_az,
                 configuration_id=None,
-                cluster_config=member_config)
+                cluster_config=member_config,
+                locality=locality)
 
             new_instances.append(new_instance)
 
@@ -209,9 +215,10 @@ class CouchbaseCluster(models.Cluster):
 
         db_info.update(task_status=ClusterTasks.GROWING_CLUSTER)
 
+        locality = srv_grp.ServerGroup.convert_to_hint(self.server_group)
         new_instances = self._create_cluster_instances(
             context, db_info.id, db_info.name, datastore, datastore_version,
-            instances)
+            instances, None, locality)
 
         task_api.load(context, datastore_version.manager).grow_cluster(
             db_info.id, [instance.id for instance in new_instances])

@@ -30,6 +30,7 @@ from trove.common.i18n import _
 from trove.common.notification import EndNotification
 from trove.common import remote
 import trove.common.rpc.version as rpc_version
+from trove.common import server_group as srv_grp
 from trove.common.strategies.cluster import strategy
 from trove.datastore.models import DatastoreVersion
 import trove.extensions.mgmt.instances.models as mgmtmodels
@@ -86,6 +87,12 @@ class Manager(periodic_task.PeriodicTasks):
             master_id = slave.slave_of_id
             master = models.BuiltInstanceTasks.load(context, master_id)
             slave.detach_replica(master)
+            if master.post_processing_required_for_replication():
+                slave_instances = [BuiltInstanceTasks.load(
+                    context, slave_model.id) for slave_model in master.slaves]
+                slave_detail = [slave_instance.get_replication_detail()
+                                for slave_instance in slave_instances]
+                master.complete_master_setup(slave_detail)
 
     def _set_task_status(self, instances, status):
         for instance in instances:
@@ -137,6 +144,14 @@ class Manager(periodic_task.PeriodicTasks):
             except Exception:
                 LOG.exception(_("Exception demoting old replica source"))
                 exception_replicas.append(old_master)
+
+            if master_candidate.post_processing_required_for_replication():
+                new_slaves = list(replica_models)
+                new_slaves.remove(master_candidate)
+                new_slaves.append(old_master)
+                new_slaves_detail = [slave.get_replication_detail()
+                                     for slave in new_slaves]
+                master_candidate.complete_master_setup(new_slaves_detail)
 
             self._set_task_status([old_master] + replica_models,
                                   InstanceTasks.NONE)
@@ -196,7 +211,7 @@ class Manager(periodic_task.PeriodicTasks):
             master_ips = old_master.detach_public_ips()
             slave_ips = master_candidate.detach_public_ips()
             master_candidate.detach_replica(old_master, for_failover=True)
-            master_candidate.enable_as_master(for_failover=True)
+            master_candidate.enable_as_master()
             master_candidate.attach_public_ips(master_ips)
             master_candidate.make_read_only(False)
             old_master.attach_public_ips(slave_ips)
@@ -218,6 +233,13 @@ class Manager(periodic_task.PeriodicTasks):
                     }
                     LOG.exception(msg % msg_values)
                     exception_replicas.append(replica.id)
+
+            if master_candidate.post_processing_required_for_replication():
+                new_slaves = list(replica_models)
+                new_slaves.remove(master_candidate)
+                new_slaves_detail = [slave.get_replication_detail()
+                                     for slave in new_slaves]
+                master_candidate.complete_master_setup(new_slaves_detail)
 
             self._set_task_status([old_master] + replica_models,
                                   InstanceTasks.NONE)
@@ -292,7 +314,7 @@ class Manager(periodic_task.PeriodicTasks):
 
         master_instance_tasks = BuiltInstanceTasks.load(context, slave_of_id)
         server_group = master_instance_tasks.server_group
-        scheduler_hints = self._convert_server_group_to_hint(server_group)
+        scheduler_hints = srv_grp.ServerGroup.convert_to_hint(server_group)
         LOG.debug("Using scheduler hints for locality: %s" % scheduler_hints)
 
         try:
@@ -329,7 +351,8 @@ class Manager(periodic_task.PeriodicTasks):
             # Some datastores requires completing configuration of replication
             # nodes with information that is only available after all the
             # instances has been started.
-            if snapshot and snapshot.get('master', {}).get('post_processing'):
+            if (master_instance_tasks
+                    .post_processing_required_for_replication()):
                 slave_instances = [BuiltInstanceTasks.load(context, slave.id)
                                    for slave in master_instance_tasks.slaves]
 
@@ -382,20 +405,8 @@ class Manager(periodic_task.PeriodicTasks):
                     "Cannot create multiple non-replica instances."))
             instance_tasks = FreshInstanceTasks.load(context, instance_id)
 
-            scheduler_hints = None
-            if locality:
-                try:
-                    server_group = instance_tasks.create_server_group(locality)
-                    scheduler_hints = self._convert_server_group_to_hint(
-                        server_group)
-                except Exception as e:
-                    msg = (_("Error creating '%(locality)s' server group for "
-                             "instance %(id)s: $(error)s") %
-                           {'locality': locality, 'id': instance_id,
-                            'error': e.message})
-                    LOG.exception(msg)
-                    raise
-
+            scheduler_hints = srv_grp.ServerGroup.build_scheduler_hint(
+                context, locality, instance_id)
             instance_tasks.create_instance(flavor, image_id, databases, users,
                                            datastore_manager, packages,
                                            volume_size, backup_id,
@@ -405,12 +416,6 @@ class Manager(periodic_task.PeriodicTasks):
             timeout = (CONF.restore_usage_timeout if backup_id
                        else CONF.usage_timeout)
             instance_tasks.wait_for_instance(timeout, flavor)
-
-    def _convert_server_group_to_hint(self, server_group, hints=None):
-        if server_group:
-            hints = hints or {}
-            hints["group"] = server_group.id
-        return hints
 
     def create_instance(self, context, instance_id, name, flavor,
                         image_id, databases, users, datastore_manager,

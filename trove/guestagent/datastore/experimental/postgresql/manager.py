@@ -18,78 +18,77 @@ import os
 
 from oslo_log import log as logging
 
-from .service.config import PgSqlConfig
-from .service.database import PgSqlDatabase
-from .service.install import PgSqlInstall
-from .service.root import PgSqlRoot
-from .service.status import PgSqlAppStatus
-import pgutil
 from trove.common import cfg
 from trove.common import exception
 from trove.common.i18n import _
+from trove.common import instance as trove_instance
 from trove.common.notification import EndNotification
 from trove.common import utils
 from trove.guestagent import backup
+from trove.guestagent.datastore.experimental.postgresql.service import \
+    PgSqlAdmin
+from trove.guestagent.datastore.experimental.postgresql.service import PgSqlApp
 from trove.guestagent.datastore import manager
 from trove.guestagent.db import models
 from trove.guestagent import dbaas
 from trove.guestagent import guest_log
-from trove.guestagent.strategies.replication import get_replication_strategy
 from trove.guestagent import volume
 
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
 
-MANAGER = CONF.datastore_manager if CONF.datastore_manager else 'postgresql'
 
-REPLICATION_STRATEGY = CONF.get(MANAGER).replication_strategy
-REPLICATION_NAMESPACE = CONF.get(MANAGER).replication_namespace
-REPLICATION_STRATEGY_CLASS = get_replication_strategy(REPLICATION_STRATEGY,
-                                                      REPLICATION_NAMESPACE)
+class Manager(manager.Manager):
 
-
-class Manager(
-        PgSqlDatabase,
-        PgSqlRoot,
-        PgSqlConfig,
-        PgSqlInstall,
-        manager.Manager,
-):
-
-    PG_BUILTIN_ADMIN = 'postgres'
-
-    def __init__(self):
-        super(Manager, self).__init__()
+    def __init__(self, manager_name='postgresql'):
+        super(Manager, self).__init__(manager_name)
+        self._app = None
+        self._admin = None
 
     @property
     def status(self):
-        return PgSqlAppStatus.get()
+        return self.app.status
+
+    @property
+    def app(self):
+        if self._app is None:
+            self._app = self.build_app()
+        return self._app
+
+    def build_app(self):
+        return PgSqlApp()
+
+    @property
+    def admin(self):
+        if self._admin is None:
+            self._admin = self.app.build_admin()
+        return self._admin
 
     @property
     def configuration_manager(self):
-        return self._configuration_manager
+        return self.app.configuration_manager
 
     @property
     def datastore_log_defs(self):
-        datastore_dir = '/var/log/postgresql/'
+        owner = self.app.pgsql_owner
         long_query_time = CONF.get(self.manager).get(
             'guest_log_long_query_time')
         general_log_file = self.build_log_file_name(
-            self.GUEST_LOG_DEFS_GENERAL_LABEL, self.PGSQL_OWNER,
-            datastore_dir=datastore_dir)
+            self.GUEST_LOG_DEFS_GENERAL_LABEL, owner,
+            datastore_dir=self.app.pgsql_log_dir)
         general_log_dir, general_log_filename = os.path.split(general_log_file)
         return {
             self.GUEST_LOG_DEFS_GENERAL_LABEL: {
                 self.GUEST_LOG_TYPE_LABEL: guest_log.LogType.USER,
-                self.GUEST_LOG_USER_LABEL: self.PGSQL_OWNER,
+                self.GUEST_LOG_USER_LABEL: owner,
                 self.GUEST_LOG_FILE_LABEL: general_log_file,
                 self.GUEST_LOG_ENABLE_LABEL: {
                     'logging_collector': 'on',
-                    'log_destination': self._quote('stderr'),
-                    'log_directory': self._quote(general_log_dir),
-                    'log_filename': self._quote(general_log_filename),
-                    'log_statement': self._quote('all'),
+                    'log_destination': self._quote_str('stderr'),
+                    'log_directory': self._quote_str(general_log_dir),
+                    'log_filename': self._quote_str(general_log_filename),
+                    'log_statement': self._quote_str('all'),
                     'debug_print_plan': 'on',
                     'log_min_duration_statement': long_query_time,
                 },
@@ -100,29 +99,107 @@ class Manager(
             },
         }
 
-    def rpc_ping(self, context):
-        LOG.debug("Responding to RPC ping.")
-        return True
+    def _quote_str(self, value):
+        return "'%s'" % value
 
-    def do_prepare(
-            self,
+    def grant_access(self, context, username, hostname, databases):
+        self.admin.grant_access(context, username, hostname, databases)
+
+    def revoke_access(self, context, username, hostname, database):
+        self.admin.revoke_access(context, username, hostname, database)
+
+    def list_access(self, context, username, hostname):
+        return self.admin.list_access(context, username, hostname)
+
+    def update_overrides(self, context, overrides, remove=False):
+        self.app.update_overrides(context, overrides, remove)
+
+    def apply_overrides(self, context, overrides):
+        self.app.apply_overrides(context, overrides)
+
+    def reset_configuration(self, context, configuration):
+        self.app.reset_configuration(context, configuration)
+
+    def start_db_with_conf_changes(self, context, config_contents):
+        self.app.start_db_with_conf_changes(context, config_contents)
+
+    def create_database(self, context, databases):
+        with EndNotification(context):
+            self.admin.create_database(context, databases)
+
+    def delete_database(self, context, database):
+        with EndNotification(context):
+            self.admin.delete_database(context, database)
+
+    def list_databases(
+            self, context, limit=None, marker=None, include_marker=False):
+        return self.admin.list_databases(
+            context, limit=limit, marker=marker, include_marker=include_marker)
+
+    def install(self, context, packages):
+        self.app.install(context, packages)
+
+    def stop_db(self, context, do_not_start_on_reboot=False):
+        self.app.stop_db(do_not_start_on_reboot=do_not_start_on_reboot)
+
+    def restart(self, context):
+        self.app.restart()
+        self.set_guest_log_status(guest_log.LogStatus.Restart_Completed)
+
+    def is_root_enabled(self, context):
+        return self.app.is_root_enabled(context)
+
+    def enable_root(self, context, root_password=None):
+        return self.app.enable_root(context, root_password=root_password)
+
+    def disable_root(self, context):
+        self.app.disable_root(context)
+
+    def enable_root_with_password(self, context, root_password=None):
+        return self.app.enable_root_with_password(
             context,
-            packages,
-            databases,
-            memory_mb,
-            users,
-            device_path=None,
-            mount_point=None,
-            backup_info=None,
-            config_contents=None,
-            root_password=None,
-            overrides=None,
-            cluster_config=None,
-            snapshot=None
-    ):
-        pgutil.PG_ADMIN = self.PG_BUILTIN_ADMIN
-        self.install(context, packages)
-        self.stop_db(context)
+            root_password=root_password)
+
+    def create_user(self, context, users):
+        with EndNotification(context):
+            self.admin.create_user(context, users)
+
+    def list_users(
+            self, context, limit=None, marker=None, include_marker=False):
+        return self.admin.list_users(
+            context, limit=limit, marker=marker, include_marker=include_marker)
+
+    def delete_user(self, context, user):
+        with EndNotification(context):
+            self.admin.delete_user(context, user)
+
+    def get_user(self, context, username, hostname):
+        return self.admin.get_user(context, username, hostname)
+
+    def change_passwords(self, context, users):
+        with EndNotification(context):
+            self.admin.change_passwords(context, users)
+
+    def update_attributes(self, context, username, hostname, user_attrs):
+        with EndNotification(context):
+            self.admin.update_attributes(
+                context,
+                username,
+                hostname,
+                user_attrs)
+
+    def do_prepare(self, context, packages, databases, memory_mb, users,
+                   device_path, mount_point, backup_info, config_contents,
+                   root_password, overrides, cluster_config, snapshot):
+        self.app.install(context, packages)
+        LOG.debug("Waiting for database first boot.")
+        if (self.app.status.wait_for_real_status_to_change_to(
+                trove_instance.ServiceStatuses.RUNNING,
+                CONF.state_change_wait_time,
+                False)):
+            LOG.debug("Stopping database prior to initial configuration.")
+            self.app.stop_db()
+
         if device_path:
             device = volume.VolumeDevice(device_path)
             device.format()
@@ -130,39 +207,27 @@ class Manager(
                 device.migrate_data(mount_point)
             device.mount(mount_point)
         self.configuration_manager.save_configuration(config_contents)
-        self.apply_initial_guestagent_configuration()
+        self.app.apply_initial_guestagent_configuration()
+
+        os_admin = models.PostgreSQLUser(self.app.ADMIN_USER)
 
         if backup_info:
-            pgutil.PG_ADMIN = self.ADMIN_USER
             backup.restore(context, backup_info, '/tmp')
+            self.app.set_current_admin_user(os_admin)
 
         if snapshot:
             LOG.info("Found snapshot info: " + str(snapshot))
             self.attach_replica(context, snapshot, snapshot['config'])
 
-        self.start_db(context)
+        self.app.start_db()
 
         if not backup_info:
-            self._secure(context)
+            self.app.secure(context)
 
-        if root_password and not backup_info:
-            self.enable_root(context, root_password)
+        self._admin = PgSqlAdmin(os_admin)
 
-        if databases:
-            self.create_database(context, databases)
-
-        if users:
-            self.create_user(context, users)
-
-    def _secure(self, context):
-        # Create a new administrative user for Trove and also
-        # disable the built-in superuser.
-        os_admin_db = models.PostgreSQLSchema(self.ADMIN_USER)
-        self._create_database(context, os_admin_db)
-        self._create_admin_user(context, databases=[os_admin_db])
-        pgutil.PG_ADMIN = self.ADMIN_USER
-        postgres = models.PostgreSQLRootUser()
-        self.alter_user(context, postgres, 'NOSUPERUSER', 'NOLOGIN')
+        if not cluster_config and self.is_root_enabled(context):
+            self.status.report_root(context, self.app.default_superuser_name)
 
     def get_filesystem_stats(self, context, fs_path):
         mount_point = CONF.get(CONF.datastore_manager).mount_point
@@ -170,52 +235,22 @@ class Manager(
 
     def create_backup(self, context, backup_info):
         with EndNotification(context):
-            self.enable_backups()
+            self.app.enable_backups()
             backup.backup(context, backup_info)
 
-    def mount_volume(self, context, device_path=None, mount_point=None):
-        """Mount the volume as specified by device_path to mount_point."""
-        device = volume.VolumeDevice(device_path)
-        device.mount(mount_point, write_to_fstab=False)
-        LOG.debug(
-            "Mounted device {device} at mount point {mount}.".format(
-                device=device_path, mount=mount_point))
-
-    def unmount_volume(self, context, device_path=None, mount_point=None):
-        """Unmount the volume as specified by device_path from mount_point."""
-        device = volume.VolumeDevice(device_path)
-        device.unmount(mount_point)
-        LOG.debug(
-            "Unmounted device {device} from mount point {mount}.".format(
-                device=device_path, mount=mount_point))
-
-    def resize_fs(self, context, device_path=None, mount_point=None):
-        """Resize the filesystem as specified by device_path at mount_point."""
-        device = volume.VolumeDevice(device_path)
-        device.resize_fs(mount_point)
-        LOG.debug(
-            "Resized the filesystem at {mount}.".format(
-                mount=mount_point))
-
     def backup_required_for_replication(self, context):
-        # TODO(atomic77) Move this class into a single property
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        return replication.backup_required_for_replication()
+        return self.replication.backup_required_for_replication()
 
     def attach_replica(self, context, replica_info, slave_config):
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replication.enable_as_slave(self, replica_info, None)
+        self.replication.enable_as_slave(self, replica_info, None)
 
     def detach_replica(self, context, for_failover=False):
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replica_info = replication.detach_slave(self, for_failover)
+        replica_info = self.replication.detach_slave(self, for_failover)
         return replica_info
 
-    def enable_as_master_s2(self, context, replica_source_config,
-                            for_failover=False):
-        self.enable_backups()
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replication.enable_as_master(self, None)
+    def enable_as_master(self, context, replica_source_config):
+        self.app.enable_backups()
+        self.replication.enable_as_master(self, None)
 
     def make_read_only(self, context, read_only):
         """There seems to be no way to flag this at the database level in
@@ -228,29 +263,28 @@ class Manager(
 
     def get_replica_context(self, context):
         LOG.debug("Getting replica context.")
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        return replication.get_replica_context(None)
+        return self.replication.get_replica_context(None)
 
     def get_latest_txn_id(self, context):
-        if self.pg_is_in_recovery():
-            lsn = self.pg_last_xlog_replay_location()
+        if self.app.pg_is_in_recovery():
+            lsn = self.app.pg_last_xlog_replay_location()
         else:
-            lsn = self.pg_current_xlog_location()
+            lsn = self.app.pg_current_xlog_location()
         LOG.info("Last xlog location found: %s" % lsn)
         return lsn
 
     def get_last_txn(self, context):
-        master_host = self.pg_primary_host()
+        master_host = self.app.pg_primary_host()
         repl_offset = self.get_latest_txn_id(context)
         return master_host, repl_offset
 
     def wait_for_txn(self, context, txn):
-        if not self.pg_is_in_recovery():
+        if not self.app.pg_is_in_recovery():
             raise RuntimeError(_("Attempting to wait for a txn on a server "
                                  "not in recovery mode!"))
 
         def _wait_for_txn():
-            lsn = self.pg_last_xlog_replay_location()
+            lsn = self.app.pg_last_xlog_replay_location()
             LOG.info("Last xlog location found: %s" % lsn)
             return lsn >= txn
         try:
@@ -261,38 +295,35 @@ class Manager(
 
     def cleanup_source_on_replica_detach(self, context, replica_info):
         LOG.debug("Calling cleanup_source_on_replica_detach")
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replication.cleanup_source_on_replica_detach()
+        self.replication.cleanup_source_on_replica_detach()
 
     def demote_replication_master(self, context):
         LOG.debug("Calling demote_replication_master")
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replication.demote_master(self)
+        self.replication.demote_master(self)
 
     def get_replication_snapshot(self, context, snapshot_info,
                                  replica_source_config=None):
         LOG.debug("Getting replication snapshot.")
 
-        self.enable_backups()
-        replication = REPLICATION_STRATEGY_CLASS(context)
-        replication.enable_as_master(None, None)
+        self.app.enable_backups()
+        self.replication.enable_as_master(None, None)
 
         snapshot_id, log_position = (
-            replication.snapshot_for_replication(context, None, None,
-                                                 snapshot_info))
+            self.replication.snapshot_for_replication(context, None, None,
+                                                      snapshot_info))
 
-        mount_point = CONF.get(MANAGER).mount_point
+        mount_point = CONF.get(self.manager).mount_point
         volume_stats = dbaas.get_filesystem_volume_stats(mount_point)
 
         replication_snapshot = {
             'dataset': {
-                'datastore_manager': MANAGER,
+                'datastore_manager': self.manager,
                 'dataset_size': volume_stats.get('used', 0.0),
                 'volume_size': volume_stats.get('total', 0.0),
                 'snapshot_id': snapshot_id
             },
-            'replication_strategy': REPLICATION_STRATEGY,
-            'master': replication.get_master_ref(None, snapshot_info),
+            'replication_strategy': self.replication_strategy,
+            'master': self.replication.get_master_ref(None, snapshot_info),
             'log_position': log_position
         }
 
