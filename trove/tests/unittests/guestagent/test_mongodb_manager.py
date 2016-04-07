@@ -17,8 +17,8 @@ import pymongo
 
 import trove.common.utils as utils
 import trove.guestagent.backup as backup
-import trove.guestagent.datastore.experimental.mongodb.manager as manager
-import trove.guestagent.datastore.experimental.mongodb.service as service
+import trove.guestagent.datastore.mongodb.manager as manager
+import trove.guestagent.datastore.mongodb.service as service
 import trove.guestagent.db.models as models
 import trove.guestagent.volume as volume
 import trove.tests.unittests.trove_testtools as trove_testtools

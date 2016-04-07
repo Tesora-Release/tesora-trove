@@ -20,11 +20,11 @@ from trove.cluster.models import ClusterTasks as ClusterTaskStatus
 from trove.cluster.models import DBCluster
 import trove.common.context as context
 from trove.common.exception import GuestError
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaClusterTasks as ClusterTasks)
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaTaskManagerAPI as task_api)
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaTaskManagerStrategy as task_strategy)
 from trove.datastore import models as datastore_models
 from trove.instance.models import BaseInstance

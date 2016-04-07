@@ -37,35 +37,35 @@ defaults = {
     'mysql':
     'trove.guestagent.datastore.mysql.manager.Manager',
     'percona':
-    'trove.guestagent.datastore.experimental.percona.manager.Manager',
+    'trove.guestagent.datastore.percona.manager.Manager',
     'pxc':
-    'trove.guestagent.datastore.experimental.pxc.manager.Manager',
+    'trove.guestagent.datastore.pxc.manager.Manager',
     'redis':
-    'trove.guestagent.datastore.experimental.redis.manager.Manager',
+    'trove.guestagent.datastore.redis.manager.Manager',
     'cassandra':
-    'trove.guestagent.datastore.experimental.cassandra.manager.Manager',
+    'trove.guestagent.datastore.cassandra.manager.Manager',
     'dse':
-    'trove.guestagent.datastore.experimental.dse.manager.Manager',
+    'trove.guestagent.datastore.dse.manager.Manager',
     'couchbase':
-    'trove.guestagent.datastore.experimental.couchbase.manager.Manager',
+    'trove.guestagent.datastore.couchbase.manager.Manager',
     'mongodb':
-    'trove.guestagent.datastore.experimental.mongodb.manager.Manager',
+    'trove.guestagent.datastore.mongodb.manager.Manager',
     'postgresql':
-    'trove.guestagent.datastore.experimental.postgresql.manager.Manager',
+    'trove.guestagent.datastore.postgresql.manager.Manager',
     'couchdb':
-    'trove.guestagent.datastore.experimental.couchdb.manager.Manager',
+    'trove.guestagent.datastore.couchdb.manager.Manager',
     'vertica':
-    'trove.guestagent.datastore.experimental.vertica.manager.Manager',
+    'trove.guestagent.datastore.vertica.manager.Manager',
     'db2':
-    'trove.guestagent.datastore.experimental.db2.manager.Manager',
+    'trove.guestagent.datastore.db2.manager.Manager',
     'oracle':
     'trove.guestagent.datastore.oracle.manager.Manager',
     'oracle_ra':
     'trove.guestagent.datastore.oracle_ra.manager.Manager',
     'mariadb':
-    'trove.guestagent.datastore.experimental.mariadb.manager.Manager',
+    'trove.guestagent.datastore.mariadb.manager.Manager',
     'edb':
-    'trove.guestagent.datastore.experimental.edb.manager.Manager',
+    'trove.guestagent.datastore.edb.manager.Manager',
 }
 CONF = cfg.CONF
 

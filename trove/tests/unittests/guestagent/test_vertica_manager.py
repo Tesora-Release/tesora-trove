@@ -18,10 +18,10 @@ from testtools.matchers import Is
 
 from trove.common.exception import DatastoreOperationNotSupported
 from trove.common import instance as rd_instance
-from trove.guestagent.datastore.experimental.vertica.manager import Manager
-from trove.guestagent.datastore.experimental.vertica.service import (
+from trove.guestagent.datastore.vertica.manager import Manager
+from trove.guestagent.datastore.vertica.service import (
     VerticaAppStatus)
-from trove.guestagent.datastore.experimental.vertica.service import VerticaApp
+from trove.guestagent.datastore.vertica.service import VerticaApp
 from trove.guestagent import dbaas
 from trove.guestagent import volume
 from trove.guestagent.volume import VolumeDevice

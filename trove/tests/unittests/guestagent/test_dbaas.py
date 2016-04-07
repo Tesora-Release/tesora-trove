@@ -44,32 +44,32 @@ from trove.common import utils
 from trove.conductor import api as conductor_api
 from trove.guestagent.common import operating_system
 from trove.guestagent.common import sql_query
-from trove.guestagent.datastore.experimental.cassandra import (
+from trove.guestagent.datastore.cassandra import (
     service as cass_service)
-from trove.guestagent.datastore.experimental.couchbase import (
+from trove.guestagent.datastore.couchbase import (
     service as couchservice)
-from trove.guestagent.datastore.experimental.couchdb import (
+from trove.guestagent.datastore.couchdb import (
     service as couchdb_service)
-from trove.guestagent.datastore.experimental.db2 import (
+from trove.guestagent.datastore.db2 import (
     service as db2service)
-from trove.guestagent.datastore.experimental.mongodb import (
+from trove.guestagent.datastore.mongodb import (
     service as mongo_service)
-from trove.guestagent.datastore.experimental.mongodb import (
+from trove.guestagent.datastore.mongodb import (
     system as mongo_system)
-from trove.guestagent.datastore.experimental.postgresql import (
+from trove.guestagent.datastore.postgresql import (
     service as pg_service)
-from trove.guestagent.datastore.experimental.pxc import (
+from trove.guestagent.datastore.pxc import (
     service as pxc_service)
-from trove.guestagent.datastore.experimental.pxc import (
+from trove.guestagent.datastore.pxc import (
     system as pxc_system)
-from trove.guestagent.datastore.experimental.redis import service as rservice
-from trove.guestagent.datastore.experimental.redis.service import RedisApp
-from trove.guestagent.datastore.experimental.redis import system as RedisSystem
-from trove.guestagent.datastore.experimental.vertica import (
+from trove.guestagent.datastore.redis import service as rservice
+from trove.guestagent.datastore.redis.service import RedisApp
+from trove.guestagent.datastore.redis import system as RedisSystem
+from trove.guestagent.datastore.vertica import (
     system as vertica_system)
-from trove.guestagent.datastore.experimental.vertica.service import (
+from trove.guestagent.datastore.vertica.service import (
     VerticaAppStatus)
-from trove.guestagent.datastore.experimental.vertica.service import VerticaApp
+from trove.guestagent.datastore.vertica.service import VerticaApp
 import trove.guestagent.datastore.mysql.service as dbaas
 from trove.guestagent.datastore.mysql.service import KeepAliveConnection
 from trove.guestagent.datastore.mysql.service import MySqlAdmin
@@ -1687,25 +1687,25 @@ class ServiceRegistryTest(testtools.TestCase):
         self.assertEqual('trove.guestagent.datastore.mysql.'
                          'manager.Manager',
                          test_dict.get('mysql'))
-        self.assertEqual('trove.guestagent.datastore.experimental.'
+        self.assertEqual('trove.guestagent.datastore.'
                          'percona.manager.Manager',
                          test_dict.get('percona'))
-        self.assertEqual('trove.guestagent.datastore.experimental.redis.'
+        self.assertEqual('trove.guestagent.datastore.redis.'
                          'manager.Manager',
                          test_dict.get('redis'))
-        self.assertEqual('trove.guestagent.datastore.experimental.cassandra.'
+        self.assertEqual('trove.guestagent.datastore.cassandra.'
                          'manager.Manager',
                          test_dict.get('cassandra'))
-        self.assertEqual('trove.guestagent.datastore.experimental.'
+        self.assertEqual('trove.guestagent.datastore.'
                          'couchbase.manager.Manager',
                          test_dict.get('couchbase'))
-        self.assertEqual('trove.guestagent.datastore.experimental.mongodb.'
+        self.assertEqual('trove.guestagent.datastore.mongodb.'
                          'manager.Manager',
                          test_dict.get('mongodb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.couchdb.'
+        self.assertEqual('trove.guestagent.datastore.couchdb.'
                          'manager.Manager',
                          test_dict.get('couchdb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.db2.'
+        self.assertEqual('trove.guestagent.datastore.db2.'
                          'manager.Manager',
                          test_dict.get('db2'))
 
@@ -1720,31 +1720,31 @@ class ServiceRegistryTest(testtools.TestCase):
         self.assertEqual('trove.guestagent.datastore.mysql.'
                          'manager.Manager123',
                          test_dict.get('mysql'))
-        self.assertEqual('trove.guestagent.datastore.experimental.'
+        self.assertEqual('trove.guestagent.datastore.'
                          'percona.manager.Manager',
                          test_dict.get('percona'))
-        self.assertEqual('trove.guestagent.datastore.experimental.redis.'
+        self.assertEqual('trove.guestagent.datastore.redis.'
                          'manager.Manager',
                          test_dict.get('redis'))
-        self.assertEqual('trove.guestagent.datastore.experimental.cassandra.'
+        self.assertEqual('trove.guestagent.datastore.cassandra.'
                          'manager.Manager',
                          test_dict.get('cassandra'))
-        self.assertEqual('trove.guestagent.datastore.experimental.couchbase.'
+        self.assertEqual('trove.guestagent.datastore.couchbase.'
                          'manager.Manager',
                          test_dict.get('couchbase'))
-        self.assertEqual('trove.guestagent.datastore.experimental.mongodb.'
+        self.assertEqual('trove.guestagent.datastore.mongodb.'
                          'manager.Manager',
                          test_dict.get('mongodb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.couchdb.'
+        self.assertEqual('trove.guestagent.datastore.couchdb.'
                          'manager.Manager',
                          test_dict.get('couchdb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.vertica.'
+        self.assertEqual('trove.guestagent.datastore.vertica.'
                          'manager.Manager',
                          test_dict.get('vertica'))
-        self.assertEqual('trove.guestagent.datastore.experimental.db2.'
+        self.assertEqual('trove.guestagent.datastore.db2.'
                          'manager.Manager',
                          test_dict.get('db2'))
-        self.assertEqual('trove.guestagent.datastore.experimental.mariadb.'
+        self.assertEqual('trove.guestagent.datastore.mariadb.'
                          'manager.Manager',
                          test_dict.get('mariadb'))
 
@@ -1756,31 +1756,31 @@ class ServiceRegistryTest(testtools.TestCase):
         self.assertEqual('trove.guestagent.datastore.mysql.'
                          'manager.Manager',
                          test_dict.get('mysql'))
-        self.assertEqual('trove.guestagent.datastore.experimental.'
+        self.assertEqual('trove.guestagent.datastore.'
                          'percona.manager.Manager',
                          test_dict.get('percona'))
-        self.assertEqual('trove.guestagent.datastore.experimental.redis.'
+        self.assertEqual('trove.guestagent.datastore.redis.'
                          'manager.Manager',
                          test_dict.get('redis'))
-        self.assertEqual('trove.guestagent.datastore.experimental.cassandra.'
+        self.assertEqual('trove.guestagent.datastore.cassandra.'
                          'manager.Manager',
                          test_dict.get('cassandra'))
-        self.assertEqual('trove.guestagent.datastore.experimental.couchbase.'
+        self.assertEqual('trove.guestagent.datastore.couchbase.'
                          'manager.Manager',
                          test_dict.get('couchbase'))
-        self.assertEqual('trove.guestagent.datastore.experimental.mongodb.'
+        self.assertEqual('trove.guestagent.datastore.mongodb.'
                          'manager.Manager',
                          test_dict.get('mongodb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.couchdb.'
+        self.assertEqual('trove.guestagent.datastore.couchdb.'
                          'manager.Manager',
                          test_dict.get('couchdb'))
-        self.assertEqual('trove.guestagent.datastore.experimental.vertica.'
+        self.assertEqual('trove.guestagent.datastore.vertica.'
                          'manager.Manager',
                          test_dict.get('vertica'))
-        self.assertEqual('trove.guestagent.datastore.experimental.db2.'
+        self.assertEqual('trove.guestagent.datastore.db2.'
                          'manager.Manager',
                          test_dict.get('db2'))
-        self.assertEqual('trove.guestagent.datastore.experimental.mariadb.'
+        self.assertEqual('trove.guestagent.datastore.mariadb.'
                          'manager.Manager',
                          test_dict.get('mariadb'))
 

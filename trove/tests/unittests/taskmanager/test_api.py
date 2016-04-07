@@ -20,7 +20,7 @@ from mock import patch
 from trove.common import context
 from trove.common import exception
 from trove.common.rpc.version import RPC_API_VERSION
-from trove.common.strategies.cluster.experimental.mongodb.taskmanager import (
+from trove.common.strategies.cluster.mongodb.taskmanager import (
     MongoDbTaskManagerAPI)
 from trove.guestagent import models as agent_models
 from trove.taskmanager import api as task_api

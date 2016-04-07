@@ -858,16 +858,16 @@ pxc_opts = [
     cfg.IntOpt('min_cluster_member_count', default=3,
                help='Minimum number of members in PXC cluster.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'pxc.api.PXCAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental.pxc.'
+               default='trove.common.strategies.cluster.pxc.'
                'taskmanager.PXCTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'pxc.guestagent.PXCGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),
@@ -907,7 +907,7 @@ redis_opts = [
     cfg.StrOpt('replication_strategy', default='RedisSyncReplication',
                help='Default strategy for replication.'),
     cfg.StrOpt('replication_namespace',
-               default='trove.guestagent.strategies.replication.experimental.'
+               default='trove.guestagent.strategies.replication.'
                        'redis_sync',
                help='Namespace to load replication strategies from.'),
     cfg.StrOpt('mount_point', default='/var/lib/redis',
@@ -918,13 +918,13 @@ redis_opts = [
     cfg.StrOpt('device_path', default='/dev/vdb',
                help='Device path for volume if volume support is enabled.'),
     cfg.StrOpt('backup_namespace',
-               default="trove.guestagent.strategies.backup.experimental."
+               default="trove.guestagent.strategies.backup."
                        "redis_impl",
                help='Namespace to load backup strategies from.',
                deprecated_name='backup_namespace',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('restore_namespace',
-               default="trove.guestagent.strategies.restore.experimental."
+               default="trove.guestagent.strategies.restore."
                        "redis_impl",
                help='Namespace to load restore strategies from.',
                deprecated_name='restore_namespace',
@@ -932,16 +932,16 @@ redis_opts = [
     cfg.BoolOpt('cluster_support', default=True,
                 help='Enable clusters to be created and managed.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'redis.api.RedisAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental.redis.'
+               default='trove.common.strategies.cluster.redis.'
                'taskmanager.RedisTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'redis.guestagent.RedisGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),
@@ -985,13 +985,13 @@ cassandra_opts = [
     cfg.StrOpt('device_path', default='/dev/vdb',
                help='Device path for volume if volume support is enabled.'),
     cfg.StrOpt('backup_namespace',
-               default="trove.guestagent.strategies.backup.experimental."
+               default="trove.guestagent.strategies.backup."
                "cassandra_impl",
                help='Namespace to load backup strategies from.',
                deprecated_name='backup_namespace',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('restore_namespace',
-               default="trove.guestagent.strategies.restore.experimental."
+               default="trove.guestagent.strategies.restore."
                "cassandra_impl",
                help='Namespace to load restore strategies from.',
                deprecated_name='restore_namespace',
@@ -1015,16 +1015,16 @@ cassandra_opts = [
     cfg.BoolOpt('cluster_support', default=True,
                 help='Enable clusters to be created and managed.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'cassandra.api.CassandraAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental'
+               default='trove.common.strategies.cluster'
                '.cassandra.taskmanager.CassandraTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental'
+               default='trove.common.strategies.cluster'
                '.cassandra.guestagent.CassandraGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),
@@ -1077,13 +1077,13 @@ couchbase_opts = [
                 'the root user is immediately returned in the response of '
                 "instance-create as the 'password' field."),
     cfg.StrOpt('backup_namespace',
-               default='trove.guestagent.strategies.backup.experimental.'
+               default='trove.guestagent.strategies.backup.'
                'couchbase_impl',
                help='Namespace to load backup strategies from.',
                deprecated_name='backup_namespace',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('restore_namespace',
-               default='trove.guestagent.strategies.restore.experimental.'
+               default='trove.guestagent.strategies.restore.'
                'couchbase_impl',
                help='Namespace to load restore strategies from.',
                deprecated_name='restore_namespace',
@@ -1100,16 +1100,16 @@ couchbase_opts = [
     cfg.BoolOpt('cluster_support', default=True,
                 help='Enable clusters to be created and managed.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'couchbase.api.CouchbaseAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental'
+               default='trove.common.strategies.cluster'
                '.couchbase.taskmanager.CouchbaseTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental'
+               default='trove.common.strategies.cluster'
                '.couchbase.guestagent.CouchbaseGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),
@@ -1160,27 +1160,27 @@ mongodb_opts = [
     cfg.BoolOpt('cluster_support', default=True,
                 help='Enable clusters to be created and managed.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'mongodb.api.MongoDbAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental.mongodb.'
+               default='trove.common.strategies.cluster.mongodb.'
                'taskmanager.MongoDbTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental.'
+               default='trove.common.strategies.cluster.'
                'mongodb.guestagent.MongoDbGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),
     cfg.StrOpt('backup_namespace',
-               default='trove.guestagent.strategies.backup.experimental.'
+               default='trove.guestagent.strategies.backup.'
                        'mongo_impl',
                help='Namespace to load backup strategies from.',
                deprecated_name='backup_namespace',
                deprecated_group='DEFAULT'),
     cfg.StrOpt('restore_namespace',
-               default='trove.guestagent.strategies.restore.experimental.'
+               default='trove.guestagent.strategies.restore.'
                        'mongo_impl',
                help='Namespace to load restore strategies from.',
                deprecated_name='restore_namespace',
@@ -1229,7 +1229,7 @@ postgresql_opts = [
                default='PostgresqlReplicationStreaming',
                help='Default strategy for replication.'),
     cfg.StrOpt('replication_namespace',
-               default='trove.guestagent.strategies.replication.experimental.'
+               default='trove.guestagent.strategies.replication.'
                        'postgresql_impl',
                help='Namespace to load replication strategies from.'),
     cfg.StrOpt('mount_point', default='/var/lib/postgresql',
@@ -1245,11 +1245,11 @@ postgresql_opts = [
                 'the root user is immediately returned in the response of '
                 "instance-create as the 'password' field."),
     cfg.StrOpt('backup_namespace',
-               default='trove.guestagent.strategies.backup.experimental.'
+               default='trove.guestagent.strategies.backup.'
                'postgresql_impl',
                help='Namespace to load backup strategies from.'),
     cfg.StrOpt('restore_namespace',
-               default='trove.guestagent.strategies.restore.experimental.'
+               default='trove.guestagent.strategies.restore.'
                'postgresql_impl',
                help='Namespace to load restore strategies from.'),
     cfg.BoolOpt('volume_support', default=True,
@@ -1283,7 +1283,7 @@ edb_opts = _update_options(
     cfg.IntOpt('postgresql_port', default=5444,
                help='The TCP port the server listens on.'),
     cfg.StrOpt('backup_namespace',
-               default='trove.guestagent.strategies.backup.experimental.'
+               default='trove.guestagent.strategies.backup.'
                        'edb_impl',
                help='Namespace to load backup strategies from.'),
     cfg.StrOpt('backup_strategy', default='EdbPgBaseBackup',
@@ -1297,11 +1297,11 @@ edb_opts = _update_options(
                help="Filesystem path for mounting "
                "volumes if volume support is enabled."),
     cfg.StrOpt('restore_namespace',
-               default='trove.guestagent.strategies.restore.experimental.'
+               default='trove.guestagent.strategies.restore.'
                        'edb_impl',
                help='Namespace to load restore strategies from.'),
     cfg.StrOpt('replication_namespace',
-               default='trove.guestagent.strategies.replication.experimental.'
+               default='trove.guestagent.strategies.replication.'
                        'edb_impl',
                help='Namespace to load replication strategies from.'),
     cfg.StrOpt('replication_strategy',
@@ -1399,16 +1399,16 @@ vertica_opts = [
     cfg.IntOpt('cluster_member_count', default=3,
                help='Number of members in Vertica cluster.'),
     cfg.StrOpt('api_strategy',
-               default='trove.common.strategies.cluster.experimental.vertica.'
+               default='trove.common.strategies.cluster.vertica.'
                        'api.VerticaAPIStrategy',
                help='Class that implements datastore-specific API logic.'),
     cfg.StrOpt('taskmanager_strategy',
-               default='trove.common.strategies.cluster.experimental.vertica.'
+               default='trove.common.strategies.cluster.vertica.'
                        'taskmanager.VerticaTaskManagerStrategy',
                help='Class that implements datastore-specific task manager '
                     'logic.'),
     cfg.StrOpt('guestagent_strategy',
-               default='trove.common.strategies.cluster.experimental.vertica.'
+               default='trove.common.strategies.cluster.vertica.'
                        'guestagent.VerticaGuestAgentStrategy',
                help='Class that implements datastore-specific Guest Agent API '
                     'logic.'),

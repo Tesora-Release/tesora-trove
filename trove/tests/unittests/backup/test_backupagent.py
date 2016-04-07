@@ -27,12 +27,12 @@ from trove.common import utils
 from trove.conductor import api as conductor_api
 from trove.guestagent.backup import backupagent
 from trove.guestagent.common import configuration
-from trove.guestagent.datastore.experimental.mongodb.service import MongoDBApp
+from trove.guestagent.datastore.mongodb.service import MongoDBApp
 from trove.guestagent.strategies.backup.base import BackupRunner
 from trove.guestagent.strategies.backup.base import UnknownBackupType
-from trove.guestagent.strategies.backup.experimental import couchbase_impl
-from trove.guestagent.strategies.backup.experimental import mongo_impl
-from trove.guestagent.strategies.backup.experimental import redis_impl
+from trove.guestagent.strategies.backup import couchbase_impl
+from trove.guestagent.strategies.backup import mongo_impl
+from trove.guestagent.strategies.backup import redis_impl
 from trove.guestagent.strategies.backup import mysql_impl
 from trove.guestagent.strategies.backup.mysql_impl import MySqlApp
 from trove.guestagent.strategies.restore.base import RestoreRunner

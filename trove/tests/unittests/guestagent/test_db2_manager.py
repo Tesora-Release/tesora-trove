@@ -18,9 +18,9 @@ import testtools
 from testtools.matchers import Is, Equals, Not
 
 from trove.common.instance import ServiceStatuses
-from trove.guestagent.datastore.experimental.db2 import (
+from trove.guestagent.datastore.db2 import (
     manager as db2_manager)
-from trove.guestagent.datastore.experimental.db2 import (
+from trove.guestagent.datastore.db2 import (
     service as db2_service)
 from trove.guestagent import pkg as pkg
 from trove.guestagent import volume

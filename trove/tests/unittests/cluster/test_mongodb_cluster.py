@@ -21,7 +21,7 @@ from trove.cluster import tasks
 from trove.common import cfg
 from trove.common import exception
 from trove.common import remote
-from trove.common.strategies.cluster.experimental.mongodb import api
+from trove.common.strategies.cluster.mongodb import api
 from trove.instance import models as inst_models
 from trove.instance import tasks as inst_tasks
 from trove.tests.unittests import trove_testtools

@@ -22,7 +22,7 @@ from trove.cluster.models import DBCluster
 from trove.common import cfg
 from trove.common import exception
 from trove.common import remote
-from trove.common.strategies.cluster.experimental.redis import api as redis_api
+from trove.common.strategies.cluster.redis import api as redis_api
 from trove.instance import models as inst_models
 from trove.instance.models import DBInstance
 from trove.instance.models import InstanceTasks

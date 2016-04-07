@@ -19,9 +19,9 @@ from mock import patch
 from trove.cluster.models import ClusterTasks as ClusterTaskStatus
 from trove.cluster.models import DBCluster
 from trove.common.exception import GuestError
-from trove.common.strategies.cluster.experimental.pxc.taskmanager import (
+from trove.common.strategies.cluster.pxc.taskmanager import (
     PXCClusterTasks as ClusterTasks)
-from trove.common.strategies.cluster.experimental.pxc.taskmanager import (
+from trove.common.strategies.cluster.pxc.taskmanager import (
     PXCTaskManagerStrategy as task_strategy)
 from trove.datastore import models as datastore_models
 from trove.instance.models import BaseInstance

@@ -17,9 +17,9 @@ from mock import DEFAULT, MagicMock, patch
 from trove.guestagent import backup
 from trove.guestagent.common import configuration
 from trove.guestagent.common import operating_system
-from trove.guestagent.datastore.experimental.redis import (
+from trove.guestagent.datastore.redis import (
     service as redis_service)
-from trove.guestagent.datastore.experimental.redis.manager import (
+from trove.guestagent.datastore.redis.manager import (
     Manager as RedisManager)
 from trove.guestagent.volume import VolumeDevice
 from trove.tests.unittests import trove_testtools

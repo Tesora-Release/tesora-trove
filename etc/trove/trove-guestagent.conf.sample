@@ -136,22 +136,22 @@ rabbit_password=f7999d1955c5014aa32c
 # For vertica, following are the defaults needed:
 # mount_point = /var/lib/vertica
 # readahead_size = 2048
-# guestagent_strategy = trove.common.strategies.cluster.experimental.vertica.guestagent.VerticaGuestAgentStrategy
+# guestagent_strategy = trove.common.strategies.cluster.vertica.guestagent.VerticaGuestAgentStrategy
 
 [percona]
 backup_namespace = trove.guestagent.strategies.backup.mysql_impl
 restore_namespace = trove.guestagent.strategies.restore.mysql_impl
 
 [couchbase]
-backup_namespace = trove.guestagent.strategies.backup.experimental.couchbase_impl
-restore_namespace = trove.guestagent.strategies.restore.experimental.couchbase_impl
+backup_namespace = trove.guestagent.strategies.backup.couchbase_impl
+restore_namespace = trove.guestagent.strategies.restore.couchbase_impl
 
 [cassandra]
-backup_namespace = trove.guestagent.strategies.backup.experimental.cassandra_impl
-restore_namespace = trove.guestagent.strategies.restore.experimental.cassandra_impl
+backup_namespace = trove.guestagent.strategies.backup.cassandra_impl
+restore_namespace = trove.guestagent.strategies.restore.cassandra_impl
 
 [redis]
 # For redis, the following are the defaults for backup, and restore:
 # backup_strategy = RedisBackup
-# backup_namespace = trove.guestagent.strategies.backup.experimental.redis_impl
-# restore_namespace = trove.guestagent.strategies.restore.experimental.redis_impl
+# backup_namespace = trove.guestagent.strategies.backup.redis_impl
+# restore_namespace = trove.guestagent.strategies.restore.redis_impl

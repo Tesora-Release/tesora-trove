@@ -253,4 +253,4 @@ udp_ports = 5433, 4803, 4804, 6453
 volume_support = True
 device_path = /dev/vdb
 mount_point = /var/lib/vertica
-taskmanager_strategy = trove.common.strategies.cluster.experimental.vertica.taskmanager.VerticaTaskManagerStrategy
+taskmanager_strategy = trove.common.strategies.cluster.vertica.taskmanager.VerticaTaskManagerStrategy

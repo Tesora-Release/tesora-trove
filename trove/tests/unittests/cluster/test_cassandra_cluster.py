@@ -19,9 +19,9 @@ from mock import Mock
 from mock import patch
 
 from trove.cluster import models
-from trove.common.strategies.cluster.experimental.cassandra.api \
+from trove.common.strategies.cluster.cassandra.api \
     import CassandraCluster
-from trove.common.strategies.cluster.experimental.cassandra.taskmanager \
+from trove.common.strategies.cluster.cassandra.taskmanager \
     import CassandraClusterTasks
 from trove.instance import models as inst_models
 from trove.quota import quota

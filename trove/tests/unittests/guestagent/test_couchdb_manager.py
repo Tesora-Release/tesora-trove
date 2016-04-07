@@ -20,9 +20,9 @@ from oslo_utils import netutils
 import testtools
 
 from trove.common.instance import ServiceStatuses
-from trove.guestagent.datastore.experimental.couchdb import (
+from trove.guestagent.datastore.couchdb import (
     manager as couchdb_manager)
-from trove.guestagent.datastore.experimental.couchdb import (
+from trove.guestagent.datastore.couchdb import (
     service as couchdb_service)
 from trove.guestagent import pkg as pkg
 from trove.guestagent import volume

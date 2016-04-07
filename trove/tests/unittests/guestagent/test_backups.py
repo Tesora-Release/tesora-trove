@@ -21,16 +21,16 @@ from trove.common import exception
 from trove.common import utils
 from trove.guestagent.common import configuration
 from trove.guestagent.common import operating_system
-from trove.guestagent.datastore.experimental.mongodb.service import MongoDBApp
+from trove.guestagent.datastore.mongodb.service import MongoDBApp
 from trove.guestagent.strategies.backup import base as backupBase
-from trove.guestagent.strategies.backup.experimental.postgresql_impl \
+from trove.guestagent.strategies.backup.postgresql_impl \
     import PgBaseBackupUtil
 from trove.guestagent.strategies.backup.mysql_impl import MySqlApp
 from trove.guestagent.strategies.restore import base as restoreBase
 from trove.guestagent.strategies.restore.mysql_impl import MySQLRestoreMixin
 from trove.tests.unittests import trove_testtools
 
-from trove.guestagent.datastore.experimental.cassandra import (
+from trove.guestagent.datastore.cassandra import (
     service as cass_service
 )
 
@@ -47,21 +47,21 @@ BACKUP_SQLDUMP_CLS = ("trove.guestagent.strategies.backup."
 RESTORE_SQLDUMP_CLS = ("trove.guestagent.strategies.restore."
                        "mysql_impl.MySQLDump")
 BACKUP_CBBACKUP_CLS = ("trove.guestagent.strategies.backup."
-                       "experimental.couchbase_impl.CbBackup")
+                       "couchbase_impl.CbBackup")
 RESTORE_CBBACKUP_CLS = ("trove.guestagent.strategies.restore."
-                        "experimental.couchbase_impl.CbBackup")
+                        "couchbase_impl.CbBackup")
 BACKUP_NODETOOLSNAPSHOT_CLS = ("trove.guestagent.strategies.backup."
-                               "experimental.cassandra_impl.NodetoolSnapshot")
+                               "cassandra_impl.NodetoolSnapshot")
 RESTORE_NODETOOLSNAPSHOT_CLS = ("trove.guestagent.strategies.restore."
-                                "experimental.cassandra_impl.NodetoolSnapshot")
+                                "cassandra_impl.NodetoolSnapshot")
 BACKUP_MONGODUMP_CLS = ("trove.guestagent.strategies.backup."
-                        "experimental.mongo_impl.MongoDump")
+                        "mongo_impl.MongoDump")
 RESTORE_MONGODUMP_CLS = ("trove.guestagent.strategies.restore."
-                         "experimental.mongo_impl.MongoDump")
+                         "mongo_impl.MongoDump")
 BACKUP_REDIS_CLS = ("trove.guestagent.strategies.backup."
-                    "experimental.redis_impl.RedisBackup")
+                    "redis_impl.RedisBackup")
 RESTORE_REDIS_CLS = ("trove.guestagent.strategies.restore."
-                     "experimental.redis_impl.RedisBackup")
+                     "redis_impl.RedisBackup")
 
 PIPE = " | "
 ZIP = "gzip"
@@ -487,7 +487,7 @@ class CassandraBackupTest(trove_testtools.TestCase):
         self.addCleanup(self.get_my_ipv4_patcher.stop)
         self.get_my_ipv4_patcher.start()
         self.app_status_patcher = patch(
-            'trove.guestagent.datastore.experimental.cassandra.service.'
+            'trove.guestagent.datastore.cassandra.service.'
             'CassandraAppStatus')
         self.addCleanup(self.app_status_patcher.stop)
         self.app_status_patcher.start()

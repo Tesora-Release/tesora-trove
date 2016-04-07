@@ -16,8 +16,8 @@ from mock import MagicMock
 from mock import patch
 import testtools
 
-from trove.guestagent.datastore.experimental.pxc.manager import Manager
-import trove.guestagent.datastore.experimental.pxc.service as dbaas
+from trove.guestagent.datastore.pxc.manager import Manager
+import trove.guestagent.datastore.pxc.service as dbaas
 from trove.tests.unittests import trove_testtools
 
 

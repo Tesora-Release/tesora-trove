@@ -24,9 +24,9 @@ from testtools import ExpectedException
 from trove.common import exception
 from trove.common.instance import ServiceStatuses
 from trove.guestagent import backup
-from trove.guestagent.datastore.experimental.cassandra import (
+from trove.guestagent.datastore.cassandra import (
     manager as cass_manager)
-from trove.guestagent.datastore.experimental.cassandra import (
+from trove.guestagent.datastore.cassandra import (
     service as cass_service)
 from trove.guestagent.db import models
 from trove.guestagent import pkg as pkg

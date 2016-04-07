@@ -22,7 +22,7 @@ from trove.cluster.models import DBCluster
 from trove.common import cfg
 from trove.common import exception
 from trove.common import remote
-from trove.common.strategies.cluster.experimental.pxc import (
+from trove.common.strategies.cluster.pxc import (
     api as pxc_api)
 from trove.instance import models as inst_models
 from trove.quota.quota import QUOTAS

@@ -18,7 +18,7 @@ import mock
 import trove.common.context as context
 from trove.common import exception
 from trove.common.rpc.version import RPC_API_VERSION
-from trove.common.strategies.cluster.experimental.vertica.guestagent import (
+from trove.common.strategies.cluster.vertica.guestagent import (
     VerticaGuestAgentAPI)
 from trove import rpc
 from trove.tests.unittests import trove_testtools
