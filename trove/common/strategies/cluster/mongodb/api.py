@@ -13,6 +13,8 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import base64
+
 from novaclient import exceptions as nova_exceptions
 from oslo_log import log as logging
 
@@ -94,6 +96,8 @@ class MongoDbAPIStrategy(base.BaseAPIStrategy):
                                                     'query_router'])
         name = _check_option('name')
         related_to = _check_option('related_to')
+        nics = _check_option('nics')
+        availability_zone = _check_option('availability_zone')
 
         unused_keys = list(set(item.keys()).difference(set(used_keys)))
         if unused_keys:
@@ -109,6 +113,10 @@ class MongoDbAPIStrategy(base.BaseAPIStrategy):
             instance['name'] = name
         if related_to:
             instance['related_to'] = related_to
+        if nics:
+            instance['nics'] = nics
+        if availability_zone:
+            instance['availability_zone'] = availability_zone
         return instance
 
     @property
@@ -182,7 +190,7 @@ class MongoDbCluster(models.Cluster):
             task_status=ClusterTasks.BUILDING_INITIAL)
 
         replica_set_name = "rs1"
-        key = utils.generate_random_password()
+        key = base64.b64encode(utils.generate_random_password())
 
         member_config = {"id": db_info.id,
                          "shard_id": utils.generate_uuid(),
