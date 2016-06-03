@@ -215,6 +215,19 @@ configuration_id = {
     ]
 }
 
+module_list = {
+    "type": "array",
+    "minItems": 0,
+    "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": True,
+        "properties": {
+            "id": uuid,
+        }
+    }
+}
+
 cluster = {
     "create": {
         "type": "object",
@@ -246,10 +259,13 @@ cluster = {
                                 "flavorRef": flavorref,
                                 "volume": volume,
                                 "nics": nics,
-                                "availability_zone": non_empty_string
+                                "availability_zone": non_empty_string,
+                                "modules": module_list,
+                                "region_name": non_empty_string
                             }
                         }
-                    }
+                    },
+                    "locality": non_empty_string
                 }
             }
         }
@@ -281,8 +297,10 @@ cluster = {
                         "volume": volume,
                         "nics": nics,
                         "availability_zone": non_empty_string,
+                        "modules": module_list,
                         "related_to": non_empty_string,
-                        "type": non_empty_string
+                        "type": non_empty_string,
+                        "region_name": non_empty_string
                     }
                 }
             }
@@ -343,6 +361,8 @@ instance = {
                         }
                     },
                     "nics": nics,
+                    "modules": module_list,
+                    "region_name": non_empty_string,
                     "locality": non_empty_string
                 }
             }
@@ -537,6 +557,93 @@ guest_log = {
             "discard": boolean_string
         }
     }
+}
+
+module_contents = {
+    "type": "string",
+    "minLength": 1,
+    "maxLength": 16777215,
+    "pattern": "^.*.+.*$"
+}
+
+module = {
+    "create": {
+        "name": "module:create",
+        "type": "object",
+        "required": ["module"],
+        "properties": {
+            "module": {
+                "type": "object",
+                "required": ["name", "module_type", "contents"],
+                "additionalProperties": True,
+                "properties": {
+                    "name": non_empty_string,
+                    "module_type": non_empty_string,
+                    "contents": module_contents,
+                    "description": non_empty_string,
+                    "datastore": {
+                        "type": "object",
+                        "properties": {
+                            "type": non_empty_string,
+                            "version": non_empty_string
+                        }
+                    },
+                    "auto_apply": boolean_string,
+                    "all_tenants": boolean_string,
+                    "visible": boolean_string,
+                    "live_update": boolean_string,
+                }
+            }
+        }
+    },
+    "update": {
+        "name": "module:update",
+        "type": "object",
+        "required": ["module"],
+        "properties": {
+            "module": {
+                "type": "object",
+                "required": [],
+                "additionalProperties": True,
+                "properties": {
+                    "name": non_empty_string,
+                    "type": non_empty_string,
+                    "contents": module_contents,
+                    "description": non_empty_string,
+                    "datastore": {
+                        "type": "object",
+                        "additionalProperties": True,
+                        "properties": {
+                            "type": non_empty_string,
+                            "version": non_empty_string
+                        }
+                    },
+                    "auto_apply": boolean_string,
+                    "all_tenants": boolean_string,
+                    "visible": boolean_string,
+                    "live_update": boolean_string,
+                }
+            }
+        }
+    },
+    "apply": {
+        "name": "module:apply",
+        "type": "object",
+        "required": ["modules"],
+        "properties": {
+            "modules": module_list,
+        }
+    },
+    "list": {
+        "name": "module:list",
+        "type": "object",
+        "required": [],
+        "properties": {
+            "module": uuid,
+            "from_guest": boolean_string,
+            "include_contents": boolean_string
+        }
+    },
 }
 
 configuration = {

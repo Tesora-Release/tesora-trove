@@ -21,13 +21,10 @@ from trove.common.i18n import _
 from trove.common import instance as rd_instance
 from trove.tests.fakes.common import authorize
 
+import collections
 import eventlet
 import uuid
 
-try:
-    from collections import OrderedDict
-except ImportError:
-    from ordereddict import OrderedDict
 
 LOG = logging.getLogger(__name__)
 FAKE_HOSTS = ["fake_host_1", "fake_host_2"]
@@ -653,7 +650,7 @@ class FakeHosts(object):
     def __init__(self, servers):
         # Use an ordered dict to make the results of the fake api call
         # return in the same order for the example generator.
-        self.hosts = OrderedDict()
+        self.hosts = collections.OrderedDict()
         for host in FAKE_HOSTS:
             self.add_host(FakeHost(host, servers))
 
@@ -874,13 +871,13 @@ def get_client_data(context):
     return CLIENT_DATA[context]
 
 
-def fake_create_nova_client(context):
+def fake_create_nova_client(context, region_name=None):
     return get_client_data(context)['nova']
 
 
-def fake_create_nova_volume_client(context):
+def fake_create_nova_volume_client(context, region_name=None):
     return get_client_data(context)['volume']
 
 
-def fake_create_cinder_client(context):
+def fake_create_cinder_client(context, region_name=None):
     return get_client_data(context)['volume']

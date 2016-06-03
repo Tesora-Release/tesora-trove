@@ -11,6 +11,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from mock import patch
 import uuid
 
 from trove.common import exception
@@ -103,7 +104,8 @@ class AgentHeartBeatTest(trove_testtools.TestCase):
         self.assertIsNone(heartbeat_found)
         self.assertTrue(exception_raised)
 
-    def test_find_by_instance_id_not_found(self):
+    @patch('trove.guestagent.models.LOG')
+    def test_find_by_instance_id_not_found(self, mock_logging):
         """
         Test to retrieve a guest agents when id is not found
         """
@@ -126,7 +128,7 @@ class AgentHeartBeatTest(trove_testtools.TestCase):
         # create some unique records with the same version
         version = str(uuid.uuid4())
 
-        for x in xrange(5):
+        for x in range(5):
             instance_id = str(uuid.uuid4())
             heartbeat = AgentHeartBeat.create(
                 instance_id=instance_id,

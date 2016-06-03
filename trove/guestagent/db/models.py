@@ -264,6 +264,45 @@ class CouchbaseSchema(DatastoreSchema):
     def _is_valid_schema_name(self, value):
         return self.name_regex.match(value) is not None
 
+
+class CouchDBSchema(DatastoreSchema):
+    '''Represents the CouchDB schema and its associated properties.
+
+    The database name must consist of one or more of the following characters
+    and the name must begin with a lowercase letter.
+
+    - Lowercase characters (a-z)
+    - Digits (0-9)
+    - Any of the characters _, $, (, ), +, -, and /
+    '''
+
+    name_regex = re.compile(r'^[a-z][a-z0-9_$()+/-]*$')
+
+    def __init__(self, name=None, deserializing=False):
+        super(CouchDBSchema, self).__init__()
+        self._ignore_dbs = cfg.get_ignored_dbs()
+        # need one or the other, not both, not none (!= ~ XOR)
+        if not (bool(deserializing) != bool(name)):
+            raise ValueError(_("Bad args. name: %(name)s, "
+                               "deserializing %(deser)s.")
+                             % ({'name': bool(name),
+                                 'deser': bool(deserializing)}))
+        if not deserializing:
+            self.name = name
+
+    @property
+    def _max_schema_name_length(self):
+        return None
+
+    def _is_valid_schema_name(self, value):
+        # https://wiki.apache.org/couchdb/HTTP_database_API
+        if value.lower() in self._ignore_dbs:
+            return False
+        if re.match(r'^[a-z]*$', value[0]):
+            return True
+        else:
+            return False
+
     @classmethod
     def _dict_requirements(cls):
         return ['_name']
@@ -271,8 +310,6 @@ class CouchbaseSchema(DatastoreSchema):
 
 class MySQLDatabase(Base):
     """Represents a Database and its properties."""
-
-    _ignore_dbs = CONF.ignore_dbs
 
     # Defaults
     __charset__ = "utf8"
@@ -513,6 +550,7 @@ class MySQLDatabase(Base):
         self._name = None
         self._collate = None
         self._character_set = None
+        self._ignore_dbs = cfg.get_ignored_dbs()
 
     @property
     def name(self):
@@ -932,17 +970,76 @@ class MongoDBUser(DatastoreUser):
         return ['_name']
 
 
-class MySQLUser(Base):
-    """Represents a MySQL User and its associated properties."""
-
-    not_supported_chars = re.compile("^\s|\s$|'|\"|;|`|,|/|\\\\")
-    _ignore_users = CONF.ignore_users
+class CouchDBUser(DatastoreUser):
+    """Represents a CouchDB user and its associated properties."""
 
     def __init__(self):
         self._name = None
         self._host = None
         self._password = None
         self._databases = []
+        self._ignore_users = cfg.get_ignored_users()
+
+    def _is_valid(self, value):
+        return True
+
+    @property
+    def name(self):
+        return self._name
+
+    @name.setter
+    def name(self, value):
+        if not self._is_valid(value):
+            raise ValueError(_("'%s' is not a valid user name.") % value)
+        else:
+            self._name = value
+
+    @property
+    def password(self):
+        return self._password
+
+    @password.setter
+    def password(self, value):
+        if not self._is_valid(value):
+            raise ValueError(_("'%s' is not a valid password.") % value)
+        else:
+            self._password = value
+
+    @property
+    def databases(self):
+        return self._databases
+
+    @databases.setter
+    def databases(self, value):
+        mydb = ValidatedMySQLDatabase()
+        mydb.name = value
+        self._databases.append(mydb.serialize())
+
+    @property
+    def host(self):
+        if self._host is None:
+            return '%'
+        return self._host
+
+    @host.setter
+    def host(self, value):
+        if not self._is_valid_host_name(value):
+            raise ValueError(_("'%s' is not a valid hostname.") % value)
+        else:
+            self._host = value
+
+
+class MySQLUser(Base):
+    """Represents a MySQL User and its associated properties."""
+
+    not_supported_chars = re.compile("^\s|\s$|'|\"|;|`|,|/|\\\\")
+
+    def __init__(self):
+        self._name = None
+        self._host = None
+        self._password = None
+        self._databases = []
+        self._ignore_users = cfg.get_ignored_users()
 
     def _is_valid(self, value):
         if (not value or
@@ -1082,6 +1179,8 @@ class PostgreSQLUser(DatastoreUser):
 class CouchbaseUser(DatastoreUser):
     """Represents a Couchbase user and its associated properties."""
 
+    MAX_PASSWORD_LEN = 24
+
     def __init__(self, name, password=None, *args, **kwargs):
         super(CouchbaseUser, self).__init__(name, password, *args, **kwargs)
 
@@ -1100,7 +1199,7 @@ class CouchbaseUser(DatastoreUser):
 
     def _is_valid_password(self, value):
         length = len(value)
-        return length > 5
+        return length > 5 and length <= self.MAX_PASSWORD_LEN
 
     @classmethod
     def _dict_requirements(cls):
@@ -1112,7 +1211,8 @@ class CouchbaseUser(DatastoreUser):
 class RootUser(MySQLUser):
     """Overrides _ignore_users from the MySQLUser class."""
 
-    _ignore_users = []
+    def __init__(self):
+        self._ignore_users = []
 
 
 class MySQLRootUser(MySQLUser):
@@ -1140,6 +1240,16 @@ class PostgreSQLRootUser(PostgreSQLUser):
                                                  *args, **kwargs)
 
 
+class EnterpriseDBRootUser(PostgreSQLUser):
+    """Represents the EnterpriseDB default superuser."""
+
+    def __init__(self, password=None, *args, **kwargs):
+        if password is None:
+            password = utils.generate_random_password()
+        super(EnterpriseDBRootUser, self).__init__(
+            "enterprisedb", password=password, *args, **kwargs)
+
+
 class CassandraRootUser(CassandraUser):
     """Represents the Cassandra default superuser."""
 
@@ -1155,7 +1265,8 @@ class CouchbaseRootUser(CouchbaseUser):
 
     def __init__(self, password=None, *args, **kwargs):
         if password is None:
-            password = utils.generate_random_password()
+            pwd_len = min(self.MAX_PASSWORD_LEN, CONF.default_password_length)
+            password = utils.generate_random_password(pwd_len)
 
         # TODO(pmalik): Name should really be 'Administrator' instead.
         super(CouchbaseRootUser, self).__init__("root", password=password,

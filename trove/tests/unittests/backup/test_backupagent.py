@@ -27,12 +27,15 @@ from trove.common import utils
 from trove.conductor import api as conductor_api
 from trove.guestagent.backup import backupagent
 from trove.guestagent.common import configuration
-from trove.guestagent.datastore.experimental.mongodb.service import MongoDBApp
+from trove.guestagent.common.configuration import ImportOverrideStrategy
+from trove.guestagent.datastore.couchbase.service import \
+    CouchbaseApp
 from trove.guestagent.strategies.backup.base import BackupRunner
 from trove.guestagent.strategies.backup.base import UnknownBackupType
-from trove.guestagent.strategies.backup.experimental import couchbase_impl
-from trove.guestagent.strategies.backup.experimental import mongo_impl
-from trove.guestagent.strategies.backup.experimental import redis_impl
+from trove.guestagent.strategies.backup import couchbase_impl
+from trove.guestagent.strategies.backup import db2_impl
+from trove.guestagent.strategies.backup import mongo_impl
+from trove.guestagent.strategies.backup import redis_impl
 from trove.guestagent.strategies.backup import mysql_impl
 from trove.guestagent.strategies.backup.mysql_impl import MySqlApp
 from trove.guestagent.strategies.restore.base import RestoreRunner
@@ -43,7 +46,7 @@ def create_fake_data():
     from random import choice
     from string import ascii_letters
 
-    return ''.join([choice(ascii_letters) for _ in xrange(1024)])
+    return ''.join([choice(ascii_letters) for _ in range(1024)])
 
 
 class MockBackup(BackupRunner):
@@ -208,16 +211,16 @@ class BackupAgentTest(trove_testtools.TestCase):
         mysql_dump = mysql_impl.MySQLDump(
             'abc', extra_opts='')
         self.assertIsNotNone(mysql_dump.cmd)
-        str_mysql_dump_cmd = ('mysqldump'
-                              ' --all-databases'
-                              ' %(extra_opts)s'
-                              ' --opt'
-                              ' --password=123'
-                              ' -u os_admin'
-                              ' 2>/tmp/mysqldump.log'
-                              ' | gzip |'
-                              ' openssl enc -aes-256-cbc -salt '
-                              '-pass pass:default_aes_cbc_key')
+        str_mysql_dump_cmd = ("mysqldump"
+                              " --all-databases"
+                              " %(extra_opts)s"
+                              " --opt"
+                              " --password='123'"
+                              " -u os_admin"
+                              " 2>/tmp/mysqldump.log"
+                              " | gzip |"
+                              " openssl enc -aes-256-cbc -salt "
+                              "-pass pass:default_aes_cbc_key")
         self.assertEqual(str_mysql_dump_cmd, mysql_dump.cmd)
         self.assertIsNotNone(mysql_dump.manifest)
         self.assertEqual('abc.gz.enc', mysql_dump.manifest)
@@ -230,20 +233,21 @@ class BackupAgentTest(trove_testtools.TestCase):
         """
         inno_backup_ex = mysql_impl.InnoBackupEx('innobackupex', extra_opts='')
         self.assertIsNotNone(inno_backup_ex.cmd)
-        str_innobackup_cmd = ('sudo innobackupex'
-                              ' --stream=xbstream'
-                              ' %(extra_opts)s '
-                              ' --user=os_admin --password=123'
-                              ' /var/lib/mysql/data 2>/tmp/innobackupex.log'
-                              ' | gzip |'
-                              ' openssl enc -aes-256-cbc -salt '
-                              '-pass pass:default_aes_cbc_key')
+        str_innobackup_cmd = ("sudo innobackupex"
+                              " --stream=xbstream"
+                              " %(extra_opts)s "
+                              " --user=os_admin --password='123'"
+                              " /var/lib/mysql/data 2>/tmp/innobackupex.log"
+                              " | gzip |"
+                              " openssl enc -aes-256-cbc -salt "
+                              "-pass pass:default_aes_cbc_key")
         self.assertEqual(str_innobackup_cmd, inno_backup_ex.cmd)
         self.assertIsNotNone(inno_backup_ex.manifest)
         str_innobackup_manifest = 'innobackupex.xbstream.gz.enc'
         self.assertEqual(str_innobackup_manifest, inno_backup_ex.manifest)
 
-    def test_backup_impl_CbBackup(self):
+    @patch.object(CouchbaseApp, 'get_password', return_value='password')
+    def test_backup_impl_CbBackup(self, _):
         netutils.get_my_ipv4 = Mock(return_value="1.1.1.1")
         utils.execute_with_timeout = Mock(return_value=None)
         cbbackup = couchbase_impl.CbBackup('cbbackup', extra_opts='')
@@ -255,8 +259,19 @@ class BackupAgentTest(trove_testtools.TestCase):
         self.assertIsNotNone(cbbackup.manifest)
         self.assertIn('gz.enc', cbbackup.manifest)
 
-    @mock.patch.object(MongoDBApp, '_init_overrides_dir', return_value='')
-    def test_backup_impl_MongoDump(self, mock_init):
+    def test_backup_impl_DB2Backup(self):
+        netutils.get_my_ipv4 = Mock(return_value="1.1.1.1")
+        db2_backup = db2_impl.DB2Backup('db2backup', extra_opts='')
+        self.assertIsNotNone(db2_backup)
+        str_db2_backup_cmd = ("sudo tar cPf - /home/db2inst1/db2inst1/backup "
+                              "| gzip | openssl enc -aes-256-cbc -salt -pass "
+                              "pass:default_aes_cbc_key")
+        self.assertEqual(str_db2_backup_cmd, db2_backup.cmd)
+        self.assertIsNotNone(db2_backup.manifest)
+        self.assertIn('gz.enc', db2_backup.manifest)
+
+    @mock.patch.object(ImportOverrideStrategy, '_initialize_import_directory')
+    def test_backup_impl_MongoDump(self, _):
         netutils.get_my_ipv4 = Mock(return_value="1.1.1.1")
         utils.execute_with_timeout = Mock(return_value=None)
         mongodump = mongo_impl.MongoDump('mongodump', extra_opts='')
@@ -387,7 +402,8 @@ class BackupAgentTest(trove_testtools.TestCase):
     @patch.object(conductor_api.API, 'get_client', Mock(return_value=Mock()))
     @patch.object(conductor_api.API, 'update_backup',
                   Mock(return_value=Mock()))
-    def test_execute_lossy_backup(self):
+    @patch('trove.guestagent.backup.backupagent.LOG')
+    def test_execute_lossy_backup(self, mock_logging):
         """This test verifies that incomplete writes to swift will fail."""
         with patch.object(MockSwift, 'save',
                           return_value=(False, 'Error', 'y', 'z')):
@@ -434,7 +450,8 @@ class BackupAgentTest(trove_testtools.TestCase):
                                       bkup_info,
                                       '/var/lib/mysql/data')
 
-    def test_restore_unknown(self):
+    @patch('trove.guestagent.backup.backupagent.LOG')
+    def test_restore_unknown(self, mock_logging):
         with patch.object(backupagent, 'get_restore_strategy',
                           side_effect=ImportError):
 
@@ -455,7 +472,8 @@ class BackupAgentTest(trove_testtools.TestCase):
     @patch.object(MockSwift, 'load_metadata', return_value={'lsn': '54321'})
     @patch.object(MockStorage, 'save_metadata')
     @patch.object(backupagent, 'get_storage_strategy', return_value=MockSwift)
-    def test_backup_incremental_metadata(self,
+    @patch('trove.guestagent.backup.backupagent.LOG')
+    def test_backup_incremental_metadata(self, mock_logging,
                                          get_storage_strategy_mock,
                                          save_metadata_mock,
                                          load_metadata_mock,
@@ -476,7 +494,9 @@ class BackupAgentTest(trove_testtools.TestCase):
                          'type': 'InnoBackupEx',
                          'checksum': 'fake-checksum',
                          'parent': {'id': '246', 'location': 'fake',
-                                    'checksum': 'md5'}
+                                    'checksum': 'md5'},
+                         'datastore': 'mysql',
+                         'datastore_version': 'bo.gus'
                          }
 
             agent.execute_backup(TroveContext(),

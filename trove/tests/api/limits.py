@@ -35,9 +35,10 @@ CONF = cfg.CONF
 
 GROUP = "dbaas.api.limits"
 DEFAULT_RATE = CONF.http_get_rate
-DEFAULT_MAX_VOLUMES = CONF.max_volumes_per_user
-DEFAULT_MAX_INSTANCES = CONF.max_instances_per_user
-DEFAULT_MAX_BACKUPS = CONF.max_backups_per_user
+
+DEFAULT_MAX_VOLUMES = CONF.max_volumes_per_tenant
+DEFAULT_MAX_INSTANCES = CONF.max_instances_per_tenant
+DEFAULT_MAX_BACKUPS = CONF.max_backups_per_tenant
 
 
 def ensure_limits_are_not_faked(func):
@@ -121,7 +122,7 @@ class Limits(object):
         """Test_limits_get_remaining."""
 
         limits = ()
-        for i in xrange(5):
+        for i in range(5):
             limits = self.rd_client.limits.list()
 
         d = self._get_limits_as_dict(limits)
@@ -147,7 +148,7 @@ class Limits(object):
 
         get = None
         encountered = False
-        for i in xrange(DEFAULT_RATE + 50):
+        for i in range(DEFAULT_RATE + 50):
             try:
                 limits = rd_client.limits.list()
                 d = self._get_limits_as_dict(limits)

@@ -33,19 +33,26 @@ AGENT = BackupAgent()
 CONF = cfg.CONF
 
 REPL_BACKUP_NAMESPACE = 'trove.guestagent.strategies.backup.mysql_impl'
-REPL_BACKUP_STRATEGY = 'InnoBackupEx'
-REPL_BACKUP_INCREMENTAL_STRATEGY = 'InnoBackupExIncremental'
-REPL_BACKUP_RUNNER = backup.get_backup_strategy(
-    REPL_BACKUP_STRATEGY, REPL_BACKUP_NAMESPACE)
-REPL_BACKUP_INCREMENTAL_RUNNER = backup.get_backup_strategy(
-    REPL_BACKUP_INCREMENTAL_STRATEGY, REPL_BACKUP_NAMESPACE)
-REPL_EXTRA_OPTS = CONF.backup_runner_options.get(REPL_BACKUP_STRATEGY, '')
 
 LOG = logging.getLogger(__name__)
 
 
 class MysqlReplicationBase(base.Replication):
     """Base class for MySql Replication strategies."""
+
+    @property
+    def repl_backup_runner(self):
+        return backup.get_backup_strategy('InnoBackupEx',
+                                          REPL_BACKUP_NAMESPACE)
+
+    @property
+    def repl_incr_backup_runner(self):
+        return backup.get_backup_strategy('InnoBackupExIncremental',
+                                          REPL_BACKUP_NAMESPACE)
+
+    @property
+    def repl_backup_extra_opts(self):
+        return CONF.backup_runner_options.get('InnoBackupEx', '')
 
     def get_master_ref(self, service, snapshot_info):
         master_ref = {
@@ -90,9 +97,9 @@ class MysqlReplicationBase(base.Replication):
         # Only create a backup if it's the first replica
         if replica_number == 1:
             AGENT.execute_backup(
-                context, snapshot_info, runner=REPL_BACKUP_RUNNER,
-                extra_opts=REPL_EXTRA_OPTS,
-                incremental_runner=REPL_BACKUP_INCREMENTAL_RUNNER)
+                context, snapshot_info, runner=self.repl_backup_runner,
+                extra_opts=self.repl_backup_extra_opts,
+                incremental_runner=self.repl_incr_backup_runner)
         else:
             LOG.debug("Using existing backup created for previous replica.")
         LOG.debug("Replication snapshot %s used for replica number %d."
@@ -108,7 +115,7 @@ class MysqlReplicationBase(base.Replication):
         }
         return snapshot_id, log_position
 
-    def enable_as_master(self, service, master_config, for_failover=False):
+    def enable_as_master(self, service, master_config):
         if not service.exists_replication_source_overrides():
             service.write_replication_source_overrides(master_config)
             service.restart()
@@ -119,13 +126,9 @@ class MysqlReplicationBase(base.Replication):
 
     def enable_as_slave(self, service, snapshot, slave_config):
         try:
-            LOG.debug("enable_as_slave: about to call write_overrides")
             service.write_replication_replica_overrides(slave_config)
-            LOG.debug("enable_as_slave: about to call restart")
             service.restart()
-            LOG.debug("enable_as_slave: about to call connect_to_master")
             self.connect_to_master(service, snapshot)
-            LOG.debug("enable_as_slave: after call connect_to_master")
         except Exception:
             LOG.exception(_("Exception enabling guest as replica"))
             raise

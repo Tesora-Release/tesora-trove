@@ -132,7 +132,7 @@ template_path = /etc/trove/templates/
 # notification_driver=noop
 
 # Topics used for OpenStack notifications, list value. Default is 'notifications'.
-# notification_topics=['notifications', ]
+# notification_topics=notifications
 
 # ============ Logging information =============================
 #log_dir = /integration/report
@@ -253,4 +253,4 @@ udp_ports = 5433, 4803, 4804, 6453
 volume_support = True
 device_path = /dev/vdb
 mount_point = /var/lib/vertica
-taskmanager_strategy = trove.common.strategies.cluster.experimental.vertica.taskmanager.VerticaTaskManagerStrategy
+taskmanager_strategy = trove.common.strategies.cluster.vertica.taskmanager.VerticaTaskManagerStrategy

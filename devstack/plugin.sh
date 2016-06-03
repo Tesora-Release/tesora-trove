@@ -128,8 +128,9 @@ function configure_trove {
         setup_trove_logging $TROVE_TASKMANAGER_CONF
 
         # Increase default timeouts (required by the tests).
+        iniset $TROVE_TASKMANAGER_CONF DEFAULT agent_call_low_timeout 15
         iniset $TROVE_TASKMANAGER_CONF DEFAULT agent_call_high_timeout 300
-        iniset $TROVE_TASKMANAGER_CONF DEFAULT usage_timeout 1200
+        iniset $TROVE_TASKMANAGER_CONF DEFAULT usage_timeout 1800
     fi
 
     # (Re)create trove conductor conf file if needed
@@ -143,6 +144,9 @@ function configure_trove {
         iniset $TROVE_CONDUCTOR_CONF DEFAULT trove_auth_url $TROVE_AUTH_ENDPOINT
         iniset $TROVE_CONDUCTOR_CONF DEFAULT control_exchange trove
         setup_trove_logging $TROVE_CONDUCTOR_CONF
+
+        # Increase default timeouts (required by the tests).
+        iniset $TROVE_GUESTAGENT_CONF DEFAULT state_change_wait_time 600
     fi
 
     # Set up Guest Agent conf
@@ -181,6 +185,20 @@ function init_trove {
     # Initialize the trove database
     $TROVE_MANAGE db_sync
 
+    # Add an admin user to the 'tempest' alt_demo tenant.
+    # This is needed to test the guest_log functionality.
+    # The first part mimics the tempest setup, so make sure we have that.
+    ALT_USERNAME=${ALT_USERNAME:-alt_demo}
+    ALT_TENANT_NAME=${ALT_TENANT_NAME:-alt_demo}
+    get_or_create_project ${ALT_TENANT_NAME} default
+    get_or_create_user ${ALT_USERNAME} "$ADMIN_PASSWORD" "default" "alt_demo@example.com"
+    get_or_add_user_project_role Member ${ALT_USERNAME} ${ALT_TENANT_NAME}
+
+    # The second part adds an admin user to the tenant.
+    ADMIN_ALT_USERNAME=${ADMIN_ALT_USERNAME:-admin_${ALT_USERNAME}}
+    get_or_create_user ${ADMIN_ALT_USERNAME} "$ADMIN_PASSWORD" "default" "admin_alt_demo@example.com"
+    get_or_add_user_project_role admin ${ADMIN_ALT_USERNAME} ${ALT_TENANT_NAME}
+
     # If no guest image is specified, skip remaining setup
     [ -z "$TROVE_GUEST_IMAGE_URL" ] && return 0
 
@@ -212,7 +230,7 @@ function finalize_trove_network {
 
     iniset $TROVE_CONF DEFAULT network_label_regex .*
     iniset $TROVE_CONF DEFAULT ip_regex .*
-    iniset $TROVE_CONF DEFAULT blacklist_regex ^10.0.1.*
+    iniset $TROVE_CONF DEFAULT black_list_regex ^10.0.1.*
     iniset $TROVE_CONF DEFAULT default_neutron_networks $management_network_id
     iniset $TROVE_CONF DEFAULT network_driver trove.network.neutron.NeutronDriver
 

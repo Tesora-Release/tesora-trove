@@ -22,7 +22,7 @@ from trove.cluster.views import ClusterInstanceDetailView
 from trove.cluster.views import ClusterView
 from trove.cluster.views import load_view
 from trove.common import cfg
-from trove.common.strategies.cluster.experimental.mongodb.api import (
+from trove.common.strategies.cluster.mongodb.api import (
     MongoDbClusterView)
 from trove.tests.unittests import trove_testtools
 
@@ -73,7 +73,7 @@ class ClusterViewTest(trove_testtools.TestCase):
         cluster = Mock()
         cluster.datastore_version.manager = 'mongodb'
         view = load_view(cluster, Mock())
-        self.assertTrue(isinstance(view, MongoDbClusterView))
+        self.assertIsInstance(view, MongoDbClusterView)
 
     def test__build_instances(self, *args):
         cluster = Mock()

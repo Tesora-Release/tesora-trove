@@ -29,15 +29,20 @@ LOG = logging.getLogger(__name__)
 
 ENV = utils.ENV
 
-# TODO(cp16net) Maybe this should be moved to a config dict
 SERVICE_PARSERS = {
     'mongodb': configurations.MongoDBConfParser,
     'mysql': configurations.MySQLConfParser,
     'percona': configurations.MySQLConfParser,
+    'mariadb': configurations.MySQLConfParser,
+    'pxc': configurations.MySQLConfParser,
     'postgresql': configurations.PostgresqlConfParser,
+    'edb': configurations.PostgresqlConfParser,
     'cassandra': configurations.CassandraConfParser,
+    'cassandra_22': configurations.CassandraConfParser,
+    'cassandra_3': configurations.CassandraConfParser,
     'dse': configurations.CassandraConfParser,
     'redis': configurations.RedisConfParser,
+    'vertica': configurations.VerticaConfParser,
     'oracle': configurations.OracleConfParser,
 }
 

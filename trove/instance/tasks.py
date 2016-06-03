@@ -106,7 +106,13 @@ class InstanceTasks(object):
     EJECTION_ERROR = InstanceTask(0x56, 'EJECTING',
                                         'Replica Source Ejection Error.',
                                         is_error=True)
-    UPGRADING = InstanceTask(0x57, 'UPGRADING', 'Upgrading the instance.')
+    GROWING_ERROR = InstanceTask(0x57, 'GROWING',
+                                       'Growing Cluster Error.',
+                                       is_error=True)
+    SHRINKING_ERROR = InstanceTask(0x58, 'SHRINKING',
+                                         'Shrinking Cluster Error.',
+                                         is_error=True)
+    UPGRADING = InstanceTask(0x59, 'UPGRADING', 'Upgrading the instance.')
 
 # Dissuade further additions at run-time.
 InstanceTask.__init__ = None

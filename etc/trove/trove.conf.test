@@ -25,9 +25,6 @@ log_file = trovetest.log
 
 use_stderr = False
 
-# Show more verbose log output (sets INFO log level output)
-verbose = True
-
 # Show debugging output in logs (sets DEBUG log level output)
 debug = True
 
@@ -53,7 +50,7 @@ nova_proxy_admin_pass = 3de4922d8b6ac5a1aad9
 nova_proxy_admin_tenant_id =
 trove_auth_url = http://0.0.0.0:5000/v2.0
 
-nova_region_name = RegionOne
+os_region_name = regionOne
 nova_compute_service_type = compute
 nova_service_name = Compute Service
 
@@ -68,9 +65,9 @@ nova_volume_service_type = volume
 nova_volume_service_name = Volume Service
 device_path = /dev/vdb
 max_accepted_volume_size = 25
-max_instances_per_user = 55
-max_volumes_per_user = 100
-max_backups_per_user = 5
+max_instances_per_tenant = 55
+max_volumes_per_tenant = 100
+max_backups_per_tenant = 5
 volume_time_out=30
 
 # Config options for rate limits

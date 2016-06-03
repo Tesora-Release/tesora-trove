@@ -53,6 +53,7 @@ import trove.common.remote as remote
 from trove.common.remote import create_cinder_client
 from trove.common.remote import create_dns_client
 from trove.common.remote import create_heat_client
+from trove.common import server_group as srv_grp
 from trove.common.strategies.cluster import strategy
 from trove.common.strategies.storage import get_storage_strategy
 from trove.common import template
@@ -99,7 +100,7 @@ class NotifyMixin(object):
             datastore_manager_id = id_map[datastore_manager]
         else:
             datastore_manager_id = cfg.UNKNOWN_SERVICE_ID
-            LOG.error("Datastore ID for Manager (%s) is not configured"
+            LOG.error(_("Datastore ID for Manager (%s) is not configured")
                       % datastore_manager)
         return datastore_manager_id
 
@@ -188,7 +189,8 @@ class ConfigurationMixin(object):
 
 class ClusterTasks(Cluster):
 
-    def update_statuses_on_failure(self, cluster_id, shard_id=None):
+    def update_statuses_on_failure(self, cluster_id, shard_id=None,
+                                   status=None):
 
         if CONF.update_status_on_fail:
             if shard_id:
@@ -200,7 +202,7 @@ class ClusterTasks(Cluster):
 
             for db_instance in db_instances:
                 db_instance.set_task_status(
-                    InstanceTasks.BUILDING_ERROR_SERVER)
+                    status or InstanceTasks.BUILDING_ERROR_SERVER)
                 db_instance.save()
 
     @classmethod
@@ -322,6 +324,8 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
         # Make sure the service becomes active before sending a usage
         # record to avoid over billing a customer for an instance that
         # fails to build properly.
+        error_message = ''
+        error_details = ''
         try:
             utils.poll_until(self._service_is_active,
                              sleep_time=USAGE_SLEEP_TIME,
@@ -329,21 +333,28 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             LOG.info(_("Created instance %s successfully.") % self.id)
             TroveInstanceCreate(instance=self,
                                 instance_size=flavor['ram']).notify()
-#            self.send_usage_event('create', instance_size=flavor['ram'])
-        except PollTimeOut:
+        except PollTimeOut as ex:
             LOG.error(_("Failed to create instance %s. "
                         "Timeout waiting for instance to become active. "
                         "No usage create-event was sent.") % self.id)
             self.update_statuses_on_time_out()
-        except Exception:
+            error_message = "%s" % ex
+            error_details = traceback.format_exc()
+        except Exception as ex:
             LOG.exception(_("Failed to send usage create-event for "
                             "instance %s.") % self.id)
+            error_message = "%s" % ex
+            error_details = traceback.format_exc()
+        finally:
+            if error_message:
+                inst_models.save_instance_fault(
+                    self.id, error_message, error_details)
 
     def create_instance(self, flavor, image_id, databases, users,
                         datastore_manager, packages, volume_size,
                         backup_id, availability_zone, root_password, nics,
                         overrides, cluster_config, snapshot, volume_type,
-                        scheduler_hints):
+                        modules, scheduler_hints):
         # It is the caller's responsibility to ensure that
         # FreshInstanceTasks.wait_for_instance is called after
         # create_instance to ensure that the proper usage event gets sent
@@ -419,7 +430,7 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                             packages, databases, users, backup_info,
                             config.config_contents, root_password,
                             overrides,
-                            cluster_config, snapshot)
+                            cluster_config, snapshot, modules)
 
         if root_password:
             self.report_root_enabled()
@@ -534,7 +545,7 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                 LOG.error(msg_create)
                 # Make sure we log any unexpected errors from the create
                 if not isinstance(e_create, TroveError):
-                    LOG.error(e_create)
+                    LOG.exception(e_create)
                 msg_delete = (
                     _("An error occurred while deleting a bad "
                       "replication snapshot from instance %(source)s.") %
@@ -557,22 +568,22 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             service.set_status(ServiceStatuses.
                                FAILED_TIMEOUT_GUESTAGENT)
             service.save()
-            LOG.error(_("Service status: %(status)s") %
+            LOG.error(_("Service status: %(status)s\n"
+                        "Service error description: %(desc)s") %
                       {'status': ServiceStatuses.
-                       FAILED_TIMEOUT_GUESTAGENT.api_status})
-            LOG.error(_("Service error description: %(desc)s") %
-                      {'desc': ServiceStatuses.
+                       FAILED_TIMEOUT_GUESTAGENT.api_status,
+                       'desc': ServiceStatuses.
                        FAILED_TIMEOUT_GUESTAGENT.description})
             # Updating instance status
             db_info = DBInstance.find_by(id=self.id, deleted=False)
             db_info.set_task_status(InstanceTasks.
                                     BUILDING_ERROR_TIMEOUT_GA)
             db_info.save()
-            LOG.error(_("Trove instance status: %(action)s") %
+            LOG.error(_("Trove instance status: %(action)s\n"
+                        "Trove instance status description: %(text)s") %
                       {'action': InstanceTasks.
-                       BUILDING_ERROR_TIMEOUT_GA.action})
-            LOG.error(_("Trove instance status description: %(text)s") %
-                      {'text': InstanceTasks.
+                       BUILDING_ERROR_TIMEOUT_GA.action,
+                       'text': InstanceTasks.
                        BUILDING_ERROR_TIMEOUT_GA.db_text})
 
     def _service_is_active(self):
@@ -596,10 +607,18 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             raise TroveError(_("Service not active, status: %s") % status)
 
         c_id = self.db_info.compute_instance_id
-        nova_status = self.nova_client.servers.get(c_id).status
-        if nova_status in [InstanceStatus.ERROR,
-                           InstanceStatus.FAILED]:
-            raise TroveError(_("Server not active, status: %s") % nova_status)
+        server = self.nova_client.servers.get(c_id)
+        server_status = server.status
+        if server_status in [InstanceStatus.ERROR,
+                             InstanceStatus.FAILED]:
+            server_message = ''
+            if server.fault:
+                server_message = "\nServer error: %s" % (
+                    server.fault.get('message', 'Unknown'))
+            raise TroveError(_("Server not active, status: %(status)s"
+                               "%(srv_msg)s") %
+                             {'status': server_status,
+                              'srv_msg': server_message})
         return False
 
     def _create_server_volume(self, flavor_id, image_id, security_groups,
@@ -625,12 +644,12 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                 nics=nics, config_drive=config_drive,
                 key_name=key_name, userdata=userdata,
                 scheduler_hints=scheduler_hints)
-            LOG.debug("Created new compute instance %(server_id)s "
-                      "for id: %(id)s" %
-                      {'server_id': server.id, 'id': self.id})
-
             server_dict = server._info
-            LOG.debug("Server response: %s" % server_dict)
+            LOG.debug("Created new compute instance %(server_id)s "
+                      "for id: %(id)s\nServer response: %(response)s" %
+                      {'server_id': server.id, 'id': self.id,
+                       'response': server_dict})
+
             volume_id = None
             for volume in server_dict.get('os:volumes', []):
                 volume_id = volume.get('id')
@@ -802,8 +821,12 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                 err = inst_models.InstanceTasks.BUILDING_ERROR_VOLUME
                 self._log_and_raise(e, msg, err)
         else:
-            LOG.debug("device_path = %s" % device_path)
-            LOG.debug("mount_point = %s" % mount_point)
+            LOG.debug("device_path = %(path)s\n"
+                      "mount_point = %(point)s" %
+                      {
+                          "path": device_path,
+                          "point": mount_point
+                      })
             volume_info = {
                 'block_device': None,
                 'device_path': device_path,
@@ -813,15 +836,18 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
         return volume_info
 
     def _log_and_raise(self, exc, message, task_status):
-        LOG.error(message)
-        LOG.error(exc)
-        LOG.error(traceback.format_exc())
+        LOG.error(_("%(message)s\n%(exc)s\n%(trace)s") %
+                  {"message": message,
+                   "exc": exc,
+                   "trace": traceback.format_exc()})
         self.update_db(task_status=task_status)
-        raise TroveError(message=message)
+        exc_message = '\n%s' % exc if exc else ''
+        full_message = "%s%s" % (message, exc_message)
+        raise TroveError(message=full_message)
 
     def _create_volume(self, volume_size, volume_type, datastore_manager):
         LOG.debug("Begin _create_volume for id: %s" % self.id)
-        volume_client = create_cinder_client(self.context)
+        volume_client = create_cinder_client(self.context, self.region_name)
         volume_desc = ("datastore volume for %s" % self.id)
         volume_ref = volume_client.volumes.create(
             volume_size, name="datastore-%s" % self.id,
@@ -853,13 +879,18 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
         block_device = {bdm: mapping}
         created_volumes = [{'id': v_ref.id,
                             'size': v_ref.size}]
-        LOG.debug("block_device = %s" % block_device)
-        LOG.debug("volume = %s" % created_volumes)
 
         device_path = self.device_path
         mount_point = CONF.get(datastore_manager).mount_point
-        LOG.debug("device_path = %s" % device_path)
-        LOG.debug("mount_point = %s" % mount_point)
+
+        LOG.debug("block_device = %(device)s\n"
+                  "volume = %(volume)s\n"
+                  "device_path = %(path)s\n"
+                  "mount_point = %(point)s" %
+                  {"device": block_device,
+                   "volume": created_volumes,
+                   "path": device_path,
+                   "point": mount_point})
 
         volume_info = {'block_device': block_device,
                        'device_path': device_path,
@@ -900,7 +931,8 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
     def _guest_prepare(self, flavor_ram, volume_info,
                        packages, databases, users, backup_info=None,
                        config_contents=None, root_password=None,
-                       overrides=None, cluster_config=None, snapshot=None):
+                       overrides=None, cluster_config=None, snapshot=None,
+                       modules=None):
         LOG.debug("Entering guest_prepare")
         # Now wait for the response from the create to do additional work
         self.guest.prepare(flavor_ram, packages, databases, users,
@@ -911,7 +943,7 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                            root_password=root_password,
                            overrides=overrides,
                            cluster_config=cluster_config,
-                           snapshot=snapshot)
+                           snapshot=snapshot, modules=modules)
 
     def _create_dns_entry(self):
         dns_support = CONF.trove_dns_support
@@ -946,7 +978,7 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             server = self.nova_client.servers.get(
                 self.db_info.compute_instance_id)
             self.db_info.addresses = server.addresses
-            LOG.debug(_("Creating dns entry..."))
+            LOG.debug("Creating dns entry...")
             ip = self.dns_ip_address
             if not ip:
                 raise TroveError("Failed to create DNS entry for instance %s. "
@@ -960,7 +992,7 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
 
     def _create_secgroup(self, datastore_manager):
         security_group = SecurityGroup.create_for_instance(
-            self.id, self.context)
+            self.id, self.context, self.region_name)
         tcp_ports = CONF.get(datastore_manager).tcp_ports
         udp_ports = CONF.get(datastore_manager).udp_ports
         self._create_rules(security_group, tcp_ports, 'tcp')
@@ -987,18 +1019,9 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                 cidr = CONF.trove_security_group_rule_cidr
                 SecurityGroupRule.create_sec_group_rule(
                     s_group, protocol, int(from_), int(to_),
-                    cidr, self.context)
+                    cidr, self.context, self.region_name)
             except (ValueError, TroveError):
                 set_error_and_raise([from_, to_])
-
-    def create_server_group(self, locality):
-        server_group_name = "%s_%s" % ('locality', self.id)
-        server_group = self.nova_client.server_groups.create(
-            name=server_group_name, policies=[locality])
-        LOG.debug("Created '%s' server group for instance %s (id: %s)." %
-                  (locality, self.id, server_group.id))
-
-        return server_group
 
     def _build_heat_nics(self, nics):
         ifaces = []
@@ -1071,10 +1094,11 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
             LOG.exception(_("Error during dns entry of instance %(id)s: "
                             "%(ex)s") % {'id': self.db_info.id, 'ex': ex})
         try:
-            self._delete_server_group()
+            srv_grp.ServerGroup.delete(
+                self.context, self.server_group, self.id)
         except Exception:
-            LOG.exception(_("Error during delete server group %s")
-                          % self.server_group_name)
+            LOG.exception(_("Error during delete server group for %s")
+                          % self.id)
 
         # Poll until the server is gone.
         def server_is_finished():
@@ -1100,7 +1124,8 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
         # If volume has been resized it must be manually removed in cinder
         try:
             if self.volume_id:
-                volume_client = create_cinder_client(self.context)
+                volume_client = create_cinder_client(self.context,
+                                                     self.region_name)
                 volume = volume_client.volumes.get(self.volume_id)
                 if volume.status == "available":
                     LOG.info(_("Deleting volume %(v)s for instance: %(i)s.")
@@ -1113,22 +1138,7 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
         TroveInstanceDelete(instance=self,
                             deleted_at=timeutils.isotime(deleted_at),
                             server=old_server).notify()
-#        self.send_usage_event('delete',
-#                                deleted_at=timeutils.isotime(deleted_at),
-#                                server=old_server)
         LOG.debug("End _delete_resources for instance %s" % self.id)
-
-    def _delete_server_group(self):
-        server_group = self.server_group
-        # Only delete the server group if we're the last member in it
-        if server_group:
-            if len(server_group.members) == 1:
-                self.nova_client.server_groups.delete(server_group.id)
-                LOG.debug("Deleted server group for instance %s (id: %s)." %
-                          (self.id, server_group.id))
-            else:
-                LOG.debug("Skipping delete of server group %s (members: %s)." %
-                          (server_group.id, server_group.members))
 
     def server_status_matches(self, expected_status, server=None):
         if not server:
@@ -1167,6 +1177,11 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
         LOG.debug("Seeing if replication backup is required for instance %s." %
                   self.id)
         return self.guest.backup_required_for_replication()
+
+    def post_processing_required_for_replication(self):
+        LOG.debug("Seeing if replication post processing is required for "
+                  "instance %s." % self.id)
+        return self.guest.post_processing_required_for_replication()
 
     def get_replication_snapshot(self, snapshot_info, flavor):
 
@@ -1239,14 +1254,13 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
         for ip in ips:
             nova_instance.add_floating_ip(ip)
 
-    def enable_as_master(self, for_failover=False):
+    def enable_as_master(self):
         LOG.debug("Calling enable_as_master on %s" % self.id)
         flavor = self.nova_client.flavors.get(self.flavor_id)
         replica_source_config = self._render_replica_source_config(flavor)
         self.update_db(slave_of_id=None)
         self.slave_list = None
-        self.guest.enable_as_master(replica_source_config.config_contents,
-                                    for_failover)
+        self.guest.enable_as_master(replica_source_config.config_contents)
 
     def complete_master_setup(self, dbs):
         self.guest.complete_master_setup(dbs)
@@ -1360,84 +1374,6 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
         finally:
             self.reset_task_status()
 
-    def update_overrides(self, overrides, remove=False):
-        LOG.info(_("Initiating datastore configurations update on instance "
-                   "%s.") % self.id)
-        LOG.debug("overrides: %s" % overrides)
-        LOG.debug("self.ds_version: %s" % self.ds_version.__dict__)
-        LOG.debug("self.configuration.id: %s" % self.configuration.id)
-        # check if the configuration requires a restart of the instance
-        config = Configuration(self.context, self.configuration.id)
-        need_restart = config.does_configuration_need_restart()
-        LOG.debug("do we need a restart?: %s" % need_restart)
-        if need_restart:
-            status = inst_models.InstanceTasks.RESTART_REQUIRED
-            self.update_db(task_status=status)
-
-        flavor = self.nova_client.flavors.get(self.flavor_id)
-
-        config_overrides = self._render_override_config(
-            flavor,
-            overrides=overrides)
-        try:
-            self.guest.update_overrides(config_overrides.config_contents,
-                                        remove=remove)
-            self.guest.apply_overrides(overrides)
-        except GuestError:
-            LOG.error(_("Failed to initiate datastore configurations update "
-                      "on instance %s.") % self.id)
-
-    def unassign_configuration(self, flavor, configuration_id):
-        LOG.info(_("Initiating configuration group %(config_id)s removal from "
-                 "instance %(instance_id)s.")
-                 % {'config_id': configuration_id,
-                    'instance_id': self.id})
-
-        def _find_item(items, item_name):
-            LOG.debug("Searching for %(item_name)s in %(items)s" %
-                      {'item_name': item_name, 'items': items})
-            # find the item in the list
-            for i in items:
-                if i[0] == item_name:
-                    return i
-
-        def _convert_value(value):
-            # split the value and the size e.g. 512M=['512','M']
-            pattern = re.compile('(\d+)(\w+)')
-            split = pattern.findall(value)
-            if len(split) < 2:
-                return value
-            digits, size = split
-            conversions = {
-                'K': 1024,
-                'M': 1024 ** 2,
-                'G': 1024 ** 3,
-            }
-            return str(int(digits) * conversions[size])
-
-        default_config = self._render_config_dict(flavor)
-        args = {
-            "ds_manager": self.ds_version.manager,
-            "config": default_config,
-        }
-        LOG.debug("default %(ds_manager)s section: %(config)s" % args)
-        LOG.debug("self.configuration: %s" % self.configuration.__dict__)
-
-        overrides = {}
-        config_items = Configuration.load_items(self.context, configuration_id)
-        for item in config_items:
-            LOG.debug("finding item(%s)" % item.__dict__)
-            try:
-                key, val = _find_item(default_config, item.configuration_key)
-            except TypeError:
-                val = None
-                restart_required = inst_models.InstanceTasks.RESTART_REQUIRED
-                self.update_db(task_status=restart_required)
-            if val:
-                overrides[item.configuration_key] = _convert_value(val)
-        LOG.debug("setting the default variables in dict: %s" % overrides)
-        self.update_overrides(overrides, remove=True)
-
     def refresh_compute_server_info(self):
         """Refreshes the compute server field."""
         server = self.nova_client.servers.get(self.server.id)
@@ -1473,7 +1409,8 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
 
             if self.volume_id:
                 volume = self.volume_client.volumes.get(self.volume_id)
-                volume_device = volume.attachments[0]['device']
+                volume_device = self._fix_device_path(
+                    volume.attachments[0]['device'])
 
             injected_files = self.get_injected_files(
                 datastore_version.manager)
@@ -1502,6 +1439,14 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
             err = inst_models.InstanceTasks.BUILDING_ERROR_SERVER
             self.update_db(task_status=err)
             raise e
+
+    # Some cinder drivers appear to return "vdb" instead of "/dev/vdb".
+    # We need to account for that.
+    def _fix_device_path(self, device):
+        if device.startswith("/dev"):
+            return device
+        else:
+            return "/dev/%s" % device
 
 
 class BackupTasks(object):
@@ -1805,11 +1750,6 @@ class ResizeVolumeAction(object):
                                       modify_at=modified_time,
                                       volume_size=volume.size,
                                       ).notify()
-#             self.instance.send_usage_event('modify_volume',
-#                                            old_volume_size=self.old_size,
-#                                            launched_at=launched_time,
-#                                            modify_at=modified_time,
-#                                            volume_size=volume.size)
         else:
             self.instance.reset_task_status()
             msg = _("Failed to resize instance %(id)s volume for server "
@@ -2003,9 +1943,9 @@ class ResizeAction(ResizeActionBase):
         self.instance.server.resize(self.new_flavor_id)
 
     def _revert_nova_action(self):
-        LOG.debug("Instance %s calling Compute revert resize..."
+        LOG.debug("Instance %s calling Compute revert resize... "
+                  "Repairing config."
                   % self.instance.id)
-        LOG.debug("Repairing config.")
         try:
             config = self.instance._render_config(self.old_flavor)
             config = {'config_contents': config.config_contents}
@@ -2027,13 +1967,6 @@ class ResizeAction(ResizeActionBase):
                                   launched_at=update_time,
                                   modify_at=update_time,
                                   server=self.instance.server).notify()
-#         self.instance.send_usage_event(
-#              'modify_flavor',
-#              old_instance_size=self.old_flavor['ram'],
-#              instance_size=self.new_flavor['ram'],
-#              launched_at=timeutils.isotime(self.instance.updated),
-#              modify_at=timeutils.isotime(self.instance.updated),
-#              server=self.instance.server)
 
     def _start_datastore(self):
         config = self.instance._render_config(self.new_flavor)
@@ -2050,9 +1983,11 @@ class MigrateAction(ResizeActionBase):
         LOG.debug("Currently no assertions for a Migrate Action")
 
     def _initiate_nova_action(self):
-        LOG.debug("Migrating instance %s without flavor change ..."
-                  % self.instance.id)
-        LOG.debug("Forcing migration to host(%s)" % self.host)
+        LOG.debug("Migrating instance %(instance)s without flavor change ...\n"
+                  "Forcing migration to host(%(host)s)" %
+                  {"instance": self.instance.id,
+                   "host": self.host})
+
         self.instance.server.migrate(force_host=self.host)
 
     def _record_action_success(self):

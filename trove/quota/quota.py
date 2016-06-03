@@ -253,6 +253,12 @@ class QuotaEngine(object):
 
         return self._driver.get_quota_by_tenant(tenant_id, resource)
 
+    def get_quota_usage(self, quota):
+        """Get the usage for a quota."""
+
+        return self._driver.get_quota_usage_by_tenant(quota.tenant_id,
+                                                      quota.resource)
+
     def get_defaults(self):
         """Retrieve the default quotas."""
 
@@ -332,9 +338,11 @@ class QuotaEngine(object):
 QUOTAS = QuotaEngine()
 
 ''' Define all kind of resources here '''
-resources = [Resource(Resource.INSTANCES, 'max_instances_per_user'),
-             Resource(Resource.BACKUPS, 'max_backups_per_user'),
-             Resource(Resource.VOLUMES, 'max_volumes_per_user')]
+
+resources = [Resource(Resource.INSTANCES,
+             'max_instances_per_tenant'),
+             Resource(Resource.BACKUPS, 'max_backups_per_tenant'),
+             Resource(Resource.VOLUMES, 'max_volumes_per_tenant')]
 
 QUOTAS.register_resources(resources)
 

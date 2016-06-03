@@ -85,9 +85,6 @@ class ConfigurationManager(object):
             revision_dir = guestagent_utils.build_file_path(
                 os.path.dirname(base_config_path),
                 self.DEFAULT_STRATEGY_OVERRIDES_SUB_DIR)
-            operating_system.create_directory(
-                revision_dir, user=owner, group=group, force=True,
-                as_root=requires_root)
             self._override_strategy = OneFileOverrideStrategy(revision_dir)
         else:
             self._override_strategy = override_strategy
@@ -170,6 +167,10 @@ class ConfigurationManager(object):
         """
         self._apply_override(self.USER_GROUP, change_id, options)
 
+    def get_user_override(self, change_id=DEFAULT_CHANGE_ID):
+        """Get the user overrides"""
+        return self._override_strategy.get(self.USER_GROUP, change_id)
+
     def _apply_override(self, group_name, change_id, options):
         if not isinstance(options, dict):
             # Deserialize the options into a dict if not already.
@@ -235,6 +236,17 @@ class ConfigurationOverrideStrategy(object):
     def remove(self, group_name, change_id=None):
         """Rollback a given configuration override.
         Remove the whole group if 'change_id' is None.
+
+        :param group_name        The group the override belongs to.
+        :type group_name         string
+
+        :param change_id         The name of the override within the group.
+        :type change_id          string
+        """
+
+    @abc.abstractmethod
+    def get(self, group_name, change_id=None):
+        """Return the contents of a given configuration override
 
         :param group_name        The group the override belongs to.
         :type group_name         string
@@ -314,6 +326,7 @@ class ImportOverrideStrategy(ConfigurationOverrideStrategy):
         return self._find_revision_file(group_name, change_id) is not None
 
     def apply(self, group_name, change_id, options):
+        self._initialize_import_directory()
         revision_file = self._find_revision_file(group_name, change_id)
         if revision_file is None:
             # Create a new file.
@@ -338,6 +351,14 @@ class ImportOverrideStrategy(ConfigurationOverrideStrategy):
         operating_system.chmod(
             revision_file, FileMode.ADD_READ_ALL, as_root=self._requires_root)
 
+    def _initialize_import_directory(self):
+        """Lazy-initialize the directory for imported revision files.
+        """
+        if not os.path.exists(self._revision_dir):
+            operating_system.create_directory(
+                self._revision_dir, user=self._owner, group=self._group,
+                force=True, as_root=self._requires_root)
+
     def remove(self, group_name, change_id=None):
         removed = set()
         if change_id:
@@ -353,6 +374,13 @@ class ImportOverrideStrategy(ConfigurationOverrideStrategy):
             operating_system.remove(path, force=True,
                                     as_root=self._requires_root)
 
+    def get(self, group_name, change_id):
+        revision_file = self._find_revision_file(group_name, change_id)
+
+        return operating_system.read_file(revision_file,
+                                          codec=self._codec,
+                                          as_root=self._requires_root)
+
     def parse_updates(self):
         parsed_options = {}
         for path in self._collect_revision_files():
@@ -366,7 +394,10 @@ class ImportOverrideStrategy(ConfigurationOverrideStrategy):
     def has_revisions(self):
         """Return True if there currently are any revision files.
         """
-        return len(self._collect_revision_files()) > 0
+        return (operating_system.exists(
+            self._revision_dir, is_directory=True,
+            as_root=self._requires_root) and
+            (len(self._collect_revision_files()) > 0))
 
     def _get_last_file_index(self, group_name):
         """Get the index of the most current file in a given group.
@@ -472,6 +503,9 @@ class OneFileOverrideStrategy(ConfigurationOverrideStrategy):
                 # configuration file on the first 'apply()'.
                 operating_system.remove(self._base_revision_file, force=True,
                                         as_root=self._requires_root)
+
+    def get(self, group_name, change_id):
+        return self._import_strategy.get(group_name, change_id)
 
     def _regenerate_base_configuration(self):
         """Gather all configuration changes and apply them in order on the base

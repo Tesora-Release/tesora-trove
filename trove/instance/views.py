@@ -39,6 +39,7 @@ class InstanceView(object):
             "flavor": self._build_flavor_info(),
             "datastore": {"type": self.instance.datastore.name,
                           "version": self.instance.datastore_version.name},
+            "region": self.instance.region_name
         }
         if self.instance.volume_support:
             instance_dict['volume'] = {'size': self.instance.volume_size}
@@ -96,6 +97,9 @@ class InstanceDetailView(InstanceView):
         result['instance']['datastore']['version'] = (self.instance.
                                                       datastore_version.name)
 
+        if self.instance.fault:
+            result['instance']['fault'] = self._build_fault_info()
+
         if self.instance.slaves:
             result['instance']['replicas'] = self._build_slaves_info()
 
@@ -125,6 +129,13 @@ class InstanceDetailView(InstanceView):
             result['instance']['shard_id'] = self.instance.shard_id
 
         return result
+
+    def _build_fault_info(self):
+        return {
+            "message": self.instance.fault.message,
+            "created": self.instance.fault.updated,
+            "details": self.instance.fault.details,
+        }
 
     def _build_slaves_info(self):
         data = []
@@ -187,6 +198,8 @@ class GuestLogView(object):
             'published': self.guest_log.published,
             'pending': self.guest_log.pending,
             'container': self.guest_log.container,
+            'prefix': self.guest_log.prefix,
+            'metafile': self.guest_log.metafile,
         }
 
 

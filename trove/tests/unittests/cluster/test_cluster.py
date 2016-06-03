@@ -23,7 +23,7 @@ from trove.cluster.models import DBCluster
 from trove.common import cfg
 from trove.common import exception
 from trove.common import remote
-from trove.common.strategies.cluster.experimental.mongodb import (
+from trove.common.strategies.cluster.mongodb import (
     api as mongodb_api)
 from trove.common import utils
 from trove.datastore import models as datastore_models
@@ -61,6 +61,7 @@ class ClusterTest(trove_testtools.TestCase):
         self.cluster = mongodb_api.MongoDbCluster(self.context, self.db_info,
                                                   self.datastore,
                                                   self.datastore_version)
+        self.cluster._server_group_loaded = True
         self.instances = [{'volume_size': 1, 'flavor_id': '1234'},
                           {'volume_size': 1, 'flavor_id': '1234'},
                           {'volume_size': 1, 'flavor_id': '1234'}]
@@ -80,7 +81,7 @@ class ClusterTest(trove_testtools.TestCase):
                           self.datastore,
                           self.datastore_version,
                           [],
-                          None
+                          None, None
                           )
 
     def test_create_unequal_flavors(self):
@@ -93,7 +94,7 @@ class ClusterTest(trove_testtools.TestCase):
                           self.datastore,
                           self.datastore_version,
                           instances,
-                          None
+                          None, None
                           )
 
     @patch.object(remote, 'create_nova_client')
@@ -110,7 +111,7 @@ class ClusterTest(trove_testtools.TestCase):
                           self.datastore,
                           self.datastore_version,
                           instances,
-                          None
+                          None, None
                           )
 
     @patch.object(remote, 'create_nova_client')
@@ -140,10 +141,11 @@ class ClusterTest(trove_testtools.TestCase):
                           self.datastore,
                           self.datastore_version,
                           instances,
-                          None
+                          None, None
                           )
 
-    def test_delete_bad_task_status(self):
+    @patch('trove.cluster.models.LOG')
+    def test_delete_bad_task_status(self, mock_logging):
         self.cluster.db_info.task_status = ClusterTasks.BUILDING_INITIAL
         self.assertRaises(exception.UnprocessableEntity,
                           self.cluster.delete)
@@ -170,7 +172,8 @@ class ClusterTest(trove_testtools.TestCase):
         self.cluster.delete()
         mock_update_db.assert_called_with(task_status=ClusterTasks.DELETING)
 
-    def test_add_shard_bad_task_status(self):
+    @patch('trove.common.strategies.cluster.mongodb.api.LOG')
+    def test_add_shard_bad_task_status(self, mock_logging):
         task_status = ClusterTasks.BUILDING_INITIAL
         self.cluster.db_info.task_status = task_status
         self.assertRaises(exception.UnprocessableEntity,

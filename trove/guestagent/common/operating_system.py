@@ -20,12 +20,23 @@ import re
 import stat
 import tempfile
 
+# We need to import modules to grab the name from a given package
+# This is different on each platform, and probably don't exist on all
+try:
+    from apt import debfile
+except ImportError:
+    pass
+try:
+    import rpm
+except ImportError:
+    pass
+
 from functools import reduce
 from oslo_concurrency.processutils import UnknownArgumentError
 
 from trove.common import exception
 from trove.common.i18n import _
-from trove.common import stream_codecs
+from trove.common.stream_codecs import IdentityCodec
 from trove.common import utils
 
 REDHAT = 'redhat'
@@ -39,31 +50,36 @@ SUSE = 'suse'
 NEWLINE = '\n'
 
 
-def read_file(path, codec=stream_codecs.IdentityCodec(), as_root=False):
+def read_file(path, codec=IdentityCodec(), as_root=False, decode=True):
     """
     Read a file into a Python data structure
     digestible by 'write_file'.
 
-    :param path             Path to the read config file.
-    :type path              string
+    :param path:            Path to the read config file.
+    :type path:             string
 
-    :param codec:           A codec used to deserialize the data.
+    :param codec:           A codec used to transform the data.
     :type codec:            StreamCodec
-
-    :returns:               A dictionary of key-value pairs.
 
     :param as_root:         Execute as root.
     :type as_root:          boolean
+
+    :param decode:          Should the codec decode the data.
+    :type decode:           boolean
+
+    :returns:               A dictionary of key-value pairs.
 
     :raises:                :class:`UnprocessableEntity` if file doesn't exist.
     :raises:                :class:`UnprocessableEntity` if codec not given.
     """
     if path and exists(path, is_directory=False, as_root=as_root):
         if as_root:
-            return _read_file_as_root(path, codec)
+            return _read_file_as_root(path, codec, decode=decode)
 
-        with open(path, 'r') as fp:
-            return codec.deserialize(fp.read())
+        with open(path, 'rb') as fp:
+            if decode:
+                return codec.deserialize(fp.read())
+            return codec.serialize(fp.read())
 
     raise exception.UnprocessableEntity(_("File does not exist: %s") % path)
 
@@ -86,7 +102,7 @@ def exists(path, is_directory=False, as_root=False):
              (is_directory and os.path.isdir(path)))
 
     # Only check as root if we can't see it as the regular user, since
-    # this is very expensive
+    # this is more expensive
     if not found and as_root:
         test_flag = '-d' if is_directory else '-f'
         cmd = 'test %s %s && echo 1 || echo 0' % (test_flag, path)
@@ -98,22 +114,27 @@ def exists(path, is_directory=False, as_root=False):
     return found
 
 
-def _read_file_as_root(path, codec):
+def _read_file_as_root(path, codec, decode=True):
     """Read a file as root.
 
     :param path                Path to the written file.
     :type path                 string
 
-    :param codec:              A codec used to serialize the data.
+    :param codec:              A codec used to transform the data.
     :type codec:               StreamCodec
+
+    :param decode:             Should the codec decode the data.
+    :type decode:              boolean
     """
     with tempfile.NamedTemporaryFile() as fp:
         copy(path, fp.name, force=True, as_root=True)
         chmod(fp.name, FileMode.ADD_READ_ALL(), as_root=True)
-        return codec.deserialize(fp.read())
+        if decode:
+            return codec.deserialize(fp.read())
+        return codec.serialize(fp.read())
 
 
-def write_file(path, data, codec=stream_codecs.IdentityCodec(), as_root=False):
+def write_file(path, data, codec=IdentityCodec(), as_root=False, encode=True):
     """Write data into file using a given codec.
     Overwrite any existing contents.
     The written file can be read back into its original
@@ -125,25 +146,31 @@ def write_file(path, data, codec=stream_codecs.IdentityCodec(), as_root=False):
     :param data:               An object representing the file contents.
     :type data:                object
 
-    :param codec:              A codec used to serialize the data.
+    :param codec:              A codec used to transform the data.
     :type codec:               StreamCodec
 
     :param as_root:            Execute as root.
     :type as_root:             boolean
 
+    :param encode:             Should the codec encode the data.
+    :type encode:              boolean
+
     :raises:                   :class:`UnprocessableEntity` if path not given.
     """
     if path:
         if as_root:
-            _write_file_as_root(path, data, codec)
+            _write_file_as_root(path, data, codec, encode=encode)
         else:
-            with open(path, 'w', 0) as fp:
-                fp.write(codec.serialize(data))
+            with open(path, 'wb', 0) as fp:
+                if encode:
+                    fp.write(codec.serialize(data))
+                else:
+                    fp.write(codec.deserialize(data))
     else:
         raise exception.UnprocessableEntity(_("Invalid path: %s") % path)
 
 
-def _write_file_as_root(path, data, codec):
+def _write_file_as_root(path, data, codec, encode=True):
     """Write a file as root. Overwrite any existing contents.
 
     :param path                Path to the written file.
@@ -152,13 +179,19 @@ def _write_file_as_root(path, data, codec):
     :param data:               An object representing the file contents.
     :type data:                StreamCodec
 
-    :param codec:              A codec used to serialize the data.
+    :param codec:              A codec used to transform the data.
     :type codec:               StreamCodec
+
+    :param encode:             Should the codec encode the data.
+    :type encode:              boolean
     """
     # The files gets removed automatically once the managing object goes
     # out of scope.
-    with tempfile.NamedTemporaryFile('w', 0, delete=False) as fp:
-        fp.write(codec.serialize(data))
+    with tempfile.NamedTemporaryFile('wb', 0, delete=False) as fp:
+        if encode:
+            fp.write(codec.serialize(data))
+        else:
+            fp.write(codec.deserialize(data))
         fp.close()  # Release the resource before proceeding.
         copy(fp.name, path, force=True, as_root=True)
 
@@ -325,25 +358,26 @@ def file_discovery(file_candidates):
     for file in file_candidates:
         if os.path.isfile(file):
             return file
+    return ''
 
 
-def start_service(service_candidates):
-    _execute_service_command(service_candidates, 'cmd_start')
+def start_service(service_candidates, **kwargs):
+    _execute_service_command(service_candidates, 'cmd_start', **kwargs)
 
 
-def stop_service(service_candidates):
-    _execute_service_command(service_candidates, 'cmd_stop')
+def stop_service(service_candidates, **kwargs):
+    _execute_service_command(service_candidates, 'cmd_stop', **kwargs)
 
 
-def enable_service_on_boot(service_candidates):
-    _execute_service_command(service_candidates, 'cmd_enable')
+def enable_service_on_boot(service_candidates, **kwargs):
+    _execute_service_command(service_candidates, 'cmd_enable', **kwargs)
 
 
-def disable_service_on_boot(service_candidates):
-    _execute_service_command(service_candidates, 'cmd_disable')
+def disable_service_on_boot(service_candidates, **kwargs):
+    _execute_service_command(service_candidates, 'cmd_disable', **kwargs)
 
 
-def _execute_service_command(service_candidates, command_key):
+def _execute_service_command(service_candidates, command_key, **kwargs):
     """
     :param service_candidates        List of possible system service names.
     :type service_candidates         list
@@ -352,13 +386,28 @@ def _execute_service_command(service_candidates, command_key):
                                      'service_discovery'.
     :type command_key                string
 
+    :param timeout:                  Number of seconds if specified,
+                                     default if not.
+                                     There is no timeout if set to None.
+    :type timeout:                   integer
+
+    :raises:          :class:`UnknownArgumentError` if passed unknown args.
     :raises:          :class:`UnprocessableEntity` if no candidate names given.
     :raises:          :class:`RuntimeError` if command not found.
     """
+
+    exec_args = {}
+    if 'timeout' in kwargs:
+        exec_args['timeout'] = kwargs.pop('timeout')
+
+    if kwargs:
+        raise UnknownArgumentError(_("Got unknown keyword args: %r") % kwargs)
+
     if service_candidates:
         service = service_discovery(service_candidates)
         if command_key in service:
-            utils.execute_with_timeout(service[command_key], shell=True)
+            utils.execute_with_timeout(service[command_key], shell=True,
+                                       **exec_args)
         else:
             raise RuntimeError(_("Service control command not available: %s")
                                % command_key)
@@ -545,6 +594,42 @@ def chmod(path, mode, recursive=True, force=False, **kwargs):
     else:
         raise exception.UnprocessableEntity(
             _("Cannot change mode of a blank file."))
+
+
+def change_user_group(user, group, append=True, add_group=True, **kwargs):
+    """Adds a user to groups by using the usermod linux command with -a and
+    -G options.
+
+    seealso:: _execute_shell_cmd for valid optional keyword arguments.
+
+    :param user:            Username.
+    :type user:             string
+
+    :param group:           Group names.
+    :type group:            comma separated string
+
+    :param  append:         Adds user to a group.
+    :type append:           boolean
+
+    :param add_group:       Lists the groups that the user is a member of.
+                            While adding a new groups to an existing user
+                            with '-G' option alone, will remove all existing
+                            groups that user belongs. Therefore, always add
+                            the '-a' (append) with '-G' option to add or
+                            append new groups.
+    :type add_group:        boolean
+
+    :raises:                :class:`UnprocessableEntity` if user or group not
+                            given.
+    """
+
+    if not user:
+        raise exception.UnprocessableEntity(_("Missing user."))
+    elif not group:
+        raise exception.UnprocessableEntity(_("Missing group."))
+
+    options = (('a', append), ('G', add_group))
+    _execute_shell_cmd('usermod', options, group, user, **kwargs)
 
 
 def _build_shell_chmod_mode(mode):
@@ -751,3 +836,35 @@ def _build_command_options(options):
     """
 
     return ['-' + item[0] for item in options if item[1]]
+
+
+def get_package_command():
+    os_name = get_os()
+
+    pkg_cmd = {REDHAT: "rpm",
+               DEBIAN: "dpkg",
+               SUSE: "rpm"}[os_name]
+    install_options = {REDHAT: ["-i"],
+                       DEBIAN: ["-i"],
+                       SUSE: ["-i"]}[os_name]
+    uninstall_options = {REDHAT: ["-ev"],
+                         DEBIAN: ["-r"],
+                         SUSE: ["-ev"]}[os_name]
+    return pkg_cmd, install_options, uninstall_options
+
+
+def get_package_name(package_file):
+    pkg_cmd, install_options, uninstall_opts = get_package_command()
+    if "dpkg" == pkg_cmd:
+        deb_file = debfile.DebPackage(package_file)
+        package_name = deb_file.pkgname
+    elif "rpm" == pkg_cmd:
+        ts = rpm.ts()
+        ts.setVSFlags(rpm._RPMVSF_NOSIGNATURES)
+        with open(package_file) as fd:
+            pkg_hdr = ts.hdrFromFdno(fd)
+        package_name = pkg_hdr[rpm.RPMTAG_NAME]
+    else:
+        raise exception.UnprocessableEntity(
+            _("Unhandled package type: %s)") % pkg_cmd)
+    return package_name

@@ -67,29 +67,29 @@ class BaseDbStatus(object):
         self.status = None
         self.restart_mode = False
 
-        self._prepare_completed = None
+        self.__prepare_completed = None
 
     @property
     def prepare_completed(self):
-        if self._prepare_completed is None:
-            self._prepare_completed = os.path.isfile(
-                guestagent_utils.build_file_path(
-                    self.GUESTAGENT_DIR, self.PREPARE_END_FILENAME))
-        return self._prepare_completed
+        if self.__prepare_completed is None:
+            # Force the file check
+            self.__refresh_prepare_completed()
+        return self.__prepare_completed
 
-    @prepare_completed.setter
-    def prepare_completed(self, value):
-        # Set the value based on the existence of the file; 'value' is ignored
-        self._prepare_completed = os.path.isfile(
+    def __refresh_prepare_completed(self):
+        # Set the value of __prepared_completed based on the existence of
+        # the file.  This is required as the state is cached so this method
+        # must be called any time the existence of the file changes.
+        self.__prepare_completed = os.path.isfile(
             guestagent_utils.build_file_path(
                 self.GUESTAGENT_DIR, self.PREPARE_END_FILENAME))
 
     def begin_install(self):
-        """Called right before DB is prepared."""
+        """First call of the DB prepare."""
         prepare_start_file = guestagent_utils.build_file_path(
             self.GUESTAGENT_DIR, self.PREPARE_START_FILENAME)
         operating_system.write_file(prepare_start_file, '')
-        self.prepare_completed = False
+        self.__refresh_prepare_completed()
 
         self.set_status(instance.ServiceStatuses.BUILDING, True)
 
@@ -98,7 +98,7 @@ class BaseDbStatus(object):
         self.restart_mode = True
 
     def end_install(self, error_occurred=False, post_processing=False):
-        """Called after prepare completes."""
+        """Called after prepare has ended."""
 
         # Set the "we're done" flag if there's no error and
         # no post_processing is necessary
@@ -106,7 +106,7 @@ class BaseDbStatus(object):
             prepare_end_file = guestagent_utils.build_file_path(
                 self.GUESTAGENT_DIR, self.PREPARE_END_FILENAME)
             operating_system.write_file(prepare_end_file, '')
-            self.prepare_completed = True
+            self.__refresh_prepare_completed()
 
         final_status = None
         if error_occurred:
@@ -237,18 +237,31 @@ class BaseDbStatus(object):
         :raises:              :class:`RuntimeError` on failure.
         """
         LOG.info(_("Starting database service."))
-        operating_system.start_service(service_candidates)
+        operating_system.start_service(service_candidates, timeout=timeout)
 
+        self.wait_for_database_service_start(timeout, update_db=update_db)
+
+        if enable_on_boot:
+            LOG.info(_("Enable service auto-start on boot."))
+            operating_system.enable_service_on_boot(service_candidates)
+
+    def wait_for_database_service_start(self, timeout, update_db=False):
+        """Wait for the database to become available.
+
+        :param timeout:              Wait timeout in seconds.
+        :type timeout:               integer
+
+        :param update_db:            Suppress the Trove instance heartbeat.
+        :type update_db:             boolean
+
+        :raises:              :class:`RuntimeError` on failure.
+        """
         LOG.debug("Waiting for database to start up.")
         if not self._wait_for_database_service_status(
                 instance.ServiceStatuses.RUNNING, timeout, update_db):
             raise RuntimeError(_("Database failed to start."))
 
         LOG.info(_("Database has started successfully."))
-
-        if enable_on_boot:
-            LOG.info(_("Enable service auto-start on boot."))
-            operating_system.enable_service_on_boot(service_candidates)
 
     def stop_db_service(self, service_candidates, timeout,
                         disable_on_boot=False, update_db=False):
@@ -271,7 +284,7 @@ class BaseDbStatus(object):
         :raises:              :class:`RuntimeError` on failure.
         """
         LOG.info(_("Stopping database service."))
-        operating_system.stop_service(service_candidates)
+        operating_system.stop_service(service_candidates, timeout=timeout)
 
         LOG.debug("Waiting for database to shutdown.")
         if not self._wait_for_database_service_status(
@@ -314,29 +327,45 @@ class BaseDbStatus(object):
 
     def wait_for_real_status_to_change_to(self, status, max_time,
                                           update_db=False):
+        """Waits the given time for the real status to change to the one
+        specified.
+        The internal status is always updated. The public instance
+        state stored in the Trove database is updated only if "update_db" is
+        True.
         """
-        Waits the given time for the real status to change to the one
-        specified. Does not update the publicly viewable status Unless
-        "update_db" is True.
-        """
-        WAIT_TIME = 3
-        waited_time = 0
-        while waited_time < max_time:
-            time.sleep(WAIT_TIME)
-            waited_time += WAIT_TIME
-            LOG.debug("Waiting for DB status to change to %s." % status)
-            actual_status = self._get_actual_db_status()
-            LOG.debug("DB status was %s after %d seconds."
-                      % (actual_status, waited_time))
-            # Always keep the internal status up-to-date.
-            self.status = actual_status
-            if actual_status == status:
+        end_time = time.time() + max_time
+
+        # since python does not support a real do-while loop, we have
+        # to emulate one. Hence these shenanigans. We force at least
+        # one pass into the loop and therefore it is safe that
+        # actual_status is initialized in the loop while it is used
+        # outside.
+        loop = True
+
+        while loop:
+            self.status = self._get_actual_db_status()
+            if self.status == status:
                 if update_db:
-                    # Cast a conductor message to also update the public status
-                    # in the Trove database.
-                    self.set_status(actual_status)
+                    self.set_status(self.status)
                 return True
-        LOG.error(_("Timeout while waiting for database status to change."))
+
+            # should we remain in this loop? this is the thing
+            # that emulates the do-while construct.
+            loop = (time.time() < end_time)
+
+            # no point waiting if our time is up and we're
+            # just going to error out anyway.
+            if loop:
+                LOG.debug("Waiting for DB status to change from "
+                          "%(actual_status)s to %(status)s." %
+                          {"actual_status": self.status, "status": status})
+
+                time.sleep(CONF.state_change_poll_time)
+
+        LOG.error(_("Timeout while waiting for database status to change."
+                    "Expected state %(status)s, "
+                    "current state is %(actual_status)s") %
+                  {"status": status, "actual_status": self.status})
         return False
 
     def cleanup_stalled_db_services(self):

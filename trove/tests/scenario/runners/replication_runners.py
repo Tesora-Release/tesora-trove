@@ -48,6 +48,9 @@ class ReplicationRunner(TestRunner):
         self.test_helper.add_data(data_type, host)
         self.used_data_sets.add(data_type)
 
+    def run_add_data_after_replica(self, data_type=DataType.micro):
+        self.assert_add_replication_data(data_type, self.master_host)
+
     def run_verify_data_for_replication(self, data_type=DataType.small):
         self.assert_verify_replication_data(data_type, self.master_host)
 
@@ -82,10 +85,10 @@ class ReplicationRunner(TestRunner):
         replica = self.auth_client.instances.create(
             self.instance_info.name + replica_name,
             self.instance_info.dbaas_flavor_href,
-            self.instance_info.volume,
+            self.instance_info.volume, replica_of=master_id,
             datastore=self.instance_info.dbaas_datastore,
             datastore_version=self.instance_info.dbaas_datastore_version,
-            slave_of=master_id,
+            nics=self.instance_info.nics,
             replica_count=replica_count)
         replica_id = replica.id
 
@@ -102,6 +105,7 @@ class ReplicationRunner(TestRunner):
         CheckInstance(instance._info).slaves()
         self.assert_true(
             set(replica_ids).issubset(self._get_replica_set(instance_id)))
+        self._validate_master(instance_id)
 
     def _get_replica_set(self, master_id):
         instance = self.get_instance(master_id)
@@ -110,9 +114,10 @@ class ReplicationRunner(TestRunner):
     def _assert_is_replica(self, instance_id, master_id):
         instance = self.get_instance(instance_id)
         self.assert_client_code(200)
-        CheckInstance(instance._info).slave_of()
+        CheckInstance(instance._info).replica_of()
         self.assert_equal(master_id, instance._info['replica_of']['id'],
                           'Unexpected replication master ID')
+        self._validate_replica(instance_id)
 
     def _assert_locality(self, instance_id):
         replica_ids = self._get_replica_set(instance_id)
@@ -139,7 +144,7 @@ class ReplicationRunner(TestRunner):
             self.instance_info.volume,
             datastore=self.instance_info.dbaas_datastore,
             datastore_version=self.instance_info.dbaas_datastore_version,
-            slave_of=self.non_affinity_master_id,
+            replica_of=self.non_affinity_master_id,
             replica_count=1).id
         self.assert_client_code(expected_http_code)
 
@@ -201,6 +206,9 @@ class ReplicationRunner(TestRunner):
             host = str(replica_instance._info['ip'][0])
             self.report.log("Checking data on host %s" % host)
             self.assert_verify_replication_data(data_type, host)
+
+    def run_verify_replica_data_after_single(self):
+        self.assert_verify_replica_data(self.instance_info.id, DataType.micro)
 
     def run_verify_replica_data_new(self):
         self.assert_verify_replica_data(self.instance_info.id, DataType.tiny)
@@ -353,8 +361,86 @@ class ReplicationRunner(TestRunner):
         backup = self.auth_client.instances.backups(self.master_id)
         self.assert_equal(self.master_backup_count, len(backup))
 
+    def _validate_master(self, instance_id):
+        """This method is intended to be overridden by each
+        datastore as needed. It is to be used for any database
+        specific master instance validation.
+        """
+        pass
 
-class MariadbReplicationRunner(ReplicationRunner):
+    def _validate_replica(self, instance_id):
+        """This method is intended to be overridden by each
+        datastore as needed. It is to be used for any database
+        specific replica instance validation.
+        """
+        pass
+
+
+class PostgresqlReplicationRunner(ReplicationRunner):
+
+    def run_promote_original_source(self):
+        raise SkipTest("Not supported by Postgresql")
+
+    def run_verify_replica_data_new_master(self):
+        raise SkipTest("Not supported by Postgresql")
+
+    def run_add_data_to_replicate2(self):
+        raise SkipTest("Not supported by Postgresql")
+
+    def run_verify_data_to_replicate2(self):
+        raise SkipTest("Not supported by Postgresql")
+
+    def run_verify_replica_data_new2(self):
+        raise SkipTest("Not supported by Postgresql")
+
+    def run_promote_to_replica_source(self):
+        raise SkipTest("Not supported by Postgresql")
+
+
+class MysqlReplicationRunner(ReplicationRunner):
+
+    def _validate_master(self, instance_id):
+        """For Mysql validate that the master has its
+        binlog_format set to MIXED.
+        """
+        client = self.test_helper.get_client(
+            self.get_instance_host(instance_id))
+        self._validate_binlog_fmt(instance_id, client)
+
+    def _validate_replica(self, instance_id):
+        """For Mysql validate that any replica has its
+        binlog_format set to MIXED and it is in read_only
+        mode.
+        """
+        client = self.test_helper.get_client(
+            self.get_instance_host(instance_id))
+        self._validate_binlog_fmt(instance_id, client)
+        self._validate_read_only(instance_id, client)
+
+    def _validate_binlog_fmt(self, instance_id, client):
+        binlog_fmt = self._get_mysql_variable(client, 'binlog_format')
+        self.assert_equal(self._get_expected_binlog_format(), binlog_fmt,
+                          'Wrong binlog format detected for %s' % instance_id)
+
+    def _get_expected_binlog_format(self):
+        return 'MIXED'
+
+    def _validate_read_only(self, instance_id, client):
+        read_only = self._get_mysql_variable(client, 'read_only')
+        self.assert_equal('ON', read_only, 'Wrong read only mode detected '
+                          'for %s' % instance_id)
+
+    def _get_mysql_variable(self, client, variable):
+        cmd = "SHOW GLOBAL VARIABLES LIKE '%s'" % variable
+        row = client.execute(cmd).fetchone()
+        return row['Value']
+
+
+class PerconaReplicationRunner(MysqlReplicationRunner):
+    pass
+
+
+class MariadbReplicationRunner(MysqlReplicationRunner):
 
     def run_promote_original_source(self):
         raise SkipTest("Not supported by MariaDB 10.0")
@@ -373,3 +459,6 @@ class MariadbReplicationRunner(ReplicationRunner):
 
     def run_promote_to_replica_source(self):
         raise SkipTest("Not supported by MariaDB 10.0")
+
+    def _get_expected_binlog_format(self):
+        return 'STATEMENT'

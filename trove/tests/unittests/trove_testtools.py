@@ -20,8 +20,10 @@ import os
 import sys
 import testtools
 
+from trove.common import cfg
 from trove.common.context import TroveContext
 from trove.common.notification import DBaaSAPINotification
+from trove.tests import root_logger
 
 
 def patch_notifier(test_case):
@@ -74,6 +76,7 @@ class TestCase(testtools.TestCase):
             'TROVE_TESTS_UNMOCK_ONLY_UNIQUE', True))
 
         cls._dangling_mocks = set()
+        root_logger.DefaultRootLogger(enable_backtrace=False)
 
     @classmethod
     def is_bool(cls, val):
@@ -85,8 +88,23 @@ class TestCase(testtools.TestCase):
                           "references from a previous test case.")
 
         super(TestCase, self).setUp()
+
+        # Default manager used by all unittsest unless explicitly overriden.
+        self.patch_datastore_manager('mysql')
+
         self.addCleanup(self._assert_modules_unmocked)
         self._mocks_before = self._find_mock_refs()
+        root_logger.DefaultRootHandler.set_info(self.id())
+
+        # Default manager used by all unittsest unless explicitly overriden.
+        self.patch_datastore_manager('mysql')
+
+    def tearDown(self):
+        # yes, this is gross and not thread aware.
+        # but the only way to make it thread aware would require that
+        # we single thread all testing
+        root_logger.DefaultRootHandler.set_info(info=None)
+        super(TestCase, self).tearDown()
 
     def _assert_modules_unmocked(self):
         """Check that all members of loaded modules are currently unmocked.
@@ -133,6 +151,20 @@ class TestCase(testtools.TestCase):
                                 full_name, member, container, depth + 1)
             except ImportError:
                 pass  # Module cannot be imported - ignore it.
+            except RuntimeError:
+                # Something else went wrong when probing the class member.
+                # See: https://bugs.launchpad.net/trove/+bug/1524918
+                pass
 
     def _get_loaded_modules(self):
         return {name: obj for name, obj in sys.modules.items() if obj}
+
+    def patch_datastore_manager(self, manager_name):
+        return self.patch_conf_property('datastore_manager', manager_name)
+
+    def patch_conf_property(self, property_name, value):
+        conf_patcher = mock.patch.object(
+            cfg.CONF, property_name,
+            new_callable=mock.PropertyMock(return_value=value))
+        self.addCleanup(conf_patcher.stop)
+        return conf_patcher.start()

@@ -16,14 +16,15 @@
 import os
 import time as timer
 
+from oslo_config.cfg import NoSuchOptError
 from proboscis import asserts
+import swiftclient
 from troveclient.compat import exceptions
 
-from oslo_config.cfg import NoSuchOptError
 from trove.common import cfg
+from trove.common import exception
 from trove.common import utils
 from trove.common.utils import poll_until, build_polling_task
-from trove.common import exception
 from trove.tests.api.instances import instance_info
 from trove.tests.config import CONFIG
 from trove.tests.util import create_dbaas_client
@@ -64,6 +65,8 @@ class TestRunner(object):
     EPHEMERAL_SUPPORT = not VOLUME_SUPPORT and CONFIG.get('device_path', None)
     ROOT_PARTITION = not (VOLUME_SUPPORT or CONFIG.get('device_path', None))
 
+    GUEST_CAST_WAIT_TIMEOUT_SEC = 60
+
     report = CONFIG.get_report()
 
     def __init__(self, sleep_time=10, timeout=1200):
@@ -79,7 +82,9 @@ class TestRunner(object):
             instance_info.volume = None
 
         self.auth_client = create_dbaas_client(self.instance_info.user)
-        self.unauth_client = None
+        self._unauth_client = None
+        self._admin_client = None
+        self._swift_client = None
         self._nova_client = None
         self._test_helper = None
         self._servers = {}
@@ -151,12 +156,13 @@ class TestRunner(object):
     def test_helper(self, test_helper):
         self._test_helper = test_helper
 
-    def get_unauth_client(self):
-        if not self.unauth_client:
-            self.unauth_client = self._create_unauthorized_client()
-        return self.unauth_client
+    @property
+    def unauth_client(self):
+        if not self._unauth_client:
+            self._unauth_client = self._create_unauthorized_client()
+        return self._unauth_client
 
-    def _create_unauthorized_client(self, force=False):
+    def _create_unauthorized_client(self):
         """Create a client from a different 'unauthorized' user
         to facilitate negative testing.
         """
@@ -170,6 +176,44 @@ class TestRunner(object):
         if not self._nova_client:
             self._nova_client = create_nova_client(self.instance_info.user)
         return self._nova_client
+
+    @property
+    def admin_client(self):
+        if not self._admin_client:
+            self._admin_client = self._create_admin_client()
+        return self._admin_client
+
+    def _create_admin_client(self):
+        """Create a client from an admin user."""
+        requirements = Requirements(is_admin=True, services=["swift"])
+        admin_user = CONFIG.users.find_user(requirements)
+        return create_dbaas_client(admin_user)
+
+    @property
+    def swift_client(self):
+        if not self._swift_client:
+            self._swift_client = self._create_swift_client()
+        return self._swift_client
+
+    def _create_swift_client(self):
+        """Create a swift client from the admin user details."""
+        requirements = Requirements(is_admin=True, services=["swift"])
+        user = CONFIG.users.find_user(requirements)
+        os_options = {'region_name': CONFIG.trove_client_region_name}
+        return swiftclient.client.Connection(
+            authurl=CONFIG.nova_client['auth_url'],
+            user=user.auth_user,
+            key=user.auth_key,
+            tenant_name=user.tenant,
+            auth_version='2.0',
+            os_options=os_options)
+
+    def get_client_tenant(self, client):
+        tenant_name = client.real_client.client.tenant
+        service_url = client.real_client.client.service_url
+        su_parts = service_url.split('/')
+        tenant_id = su_parts[-1]
+        return tenant_name, tenant_id
 
     def assert_raises(self, expected_exception, expected_http_code,
                       client_cmd, *cmd_args, **cmd_kwargs):
@@ -222,9 +266,14 @@ class TestRunner(object):
             self.assert_equal(expected_http_code, client.last_http_code,
                               "Unexpected client status code")
 
-    def assert_all_instance_states(self, instance_ids, expected_states):
+    def assert_all_instance_states(self, instance_ids, expected_states,
+                                   fast_fail_status=None,
+                                   require_all_states=False):
         tasks = [build_polling_task(
-            lambda: self._assert_instance_states(instance_id, expected_states),
+            lambda: self._assert_instance_states(
+                instance_id, expected_states,
+                fast_fail_status=fast_fail_status,
+                require_all_states=require_all_states),
             sleep_time=self.def_sleep_time, time_out=self.def_timeout)
             for instance_id in instance_ids]
         poll_until(lambda: all(poll_task.ready() for poll_task in tasks),
@@ -239,7 +288,7 @@ class TestRunner(object):
                 self.fail(str(task.poll_exception()))
 
     def _assert_instance_states(self, instance_id, expected_states,
-                                fast_fail_status=['ERROR', 'FAILED'],
+                                fast_fail_status=None,
                                 require_all_states=False):
         """Keep polling for the expected instance states until the instance
         acquires either the last or fast-fail state.
@@ -249,7 +298,8 @@ class TestRunner(object):
         instance had already acquired before and moves to the next expected
         state.
         """
-
+        if fast_fail_status is None:
+            fast_fail_status = ['ERROR', 'FAILED']
         found = False
         for status in expected_states:
             if require_all_states or found or self._has_status(
@@ -373,8 +423,9 @@ class TestRunner(object):
         if server_group and not should_exist:
             raise ("Found left-over server group: %s" % server_group)
 
-    def get_instance(self, instance_id):
-        return self.auth_client.instances.get(instance_id)
+    def get_instance(self, instance_id, client=None):
+        client = client or self.auth_client
+        return client.instances.get(instance_id)
 
     def get_instance_host(self, instance_id=None):
         instance_id = instance_id or self.instance_info.id
@@ -406,7 +457,7 @@ class TestRunner(object):
         These are for internal use by the test framework and should
         not be changed by individual test-cases.
         """
-        database_def, user_def = self.build_helper_defs()
+        database_def, user_def, root_def = self.build_helper_defs()
         if database_def:
             self.report.log(
                 "Creating a helper database '%s' on instance: %s"
@@ -419,22 +470,157 @@ class TestRunner(object):
                 % (user_def['name'], user_def['password'], instance_id))
             self.auth_client.users.create(instance_id, [user_def])
 
+        if root_def:
+            # Not enabling root on a single instance of the cluster here
+            # because we want to test the cluster root enable instead.
+            pass
+
     def build_helper_defs(self):
         """Build helper database and user JSON definitions if credentials
         are defined by the helper.
         """
         database_def = None
-        user_def = None
+
+        def _get_credentials(creds):
+            if creds:
+                username = creds.get('name')
+                if username:
+                    password = creds.get('password', '')
+                    return {'name': username, 'password': password,
+                            'databases': [{'name': database}]}
+            return None
+
         credentials = self.test_helper.get_helper_credentials()
         if credentials:
             database = credentials.get('database')
             if database:
                 database_def = {'name': database}
+        credentials_root = self.test_helper.get_helper_credentials_root()
 
-            username = credentials.get('name')
-            if username:
-                password = credentials.get('password', '')
-                user_def = {'name': username, 'password': password,
-                            'databases': [{'name': database}]}
+        return (database_def,
+                _get_credentials(credentials),
+                _get_credentials(credentials_root))
 
-        return database_def, user_def
+
+class CheckInstance(AttrCheck):
+    """Class to check various attributes of Instance details."""
+
+    def __init__(self, instance):
+        super(CheckInstance, self).__init__()
+        self.instance = instance
+        self.volume_support = TestRunner.VOLUME_SUPPORT
+        self.existing_instance = TestRunner.is_using_existing_instance
+
+    def flavor(self):
+        if 'flavor' not in self.instance:
+            self.fail("'flavor' not found in instance.")
+        else:
+            allowed_attrs = ['id', 'links']
+            self.contains_allowed_attrs(
+                self.instance['flavor'], allowed_attrs,
+                msg="Flavor")
+            self.links(self.instance['flavor']['links'])
+
+    def datastore(self):
+        if 'datastore' not in self.instance:
+            self.fail("'datastore' not found in instance.")
+        else:
+            allowed_attrs = ['type', 'version']
+            self.contains_allowed_attrs(
+                self.instance['datastore'], allowed_attrs,
+                msg="datastore")
+
+    def volume_key_exists(self):
+        if 'volume' not in self.instance:
+            self.fail("'volume' not found in instance.")
+            return False
+        return True
+
+    def volume(self):
+        if not self.volume_support:
+            return
+        if self.volume_key_exists():
+            allowed_attrs = ['size']
+            if self.existing_instance:
+                allowed_attrs.append('used')
+            self.contains_allowed_attrs(
+                self.instance['volume'], allowed_attrs,
+                msg="Volumes")
+
+    def used_volume(self):
+        if not self.volume_support:
+            return
+        if self.volume_key_exists():
+            allowed_attrs = ['size', 'used']
+            print(self.instance)
+            self.contains_allowed_attrs(
+                self.instance['volume'], allowed_attrs,
+                msg="Volumes")
+
+    def volume_mgmt(self):
+        if not self.volume_support:
+            return
+        if self.volume_key_exists():
+            allowed_attrs = ['description', 'id', 'name', 'size']
+            self.contains_allowed_attrs(
+                self.instance['volume'], allowed_attrs,
+                msg="Volumes")
+
+    def addresses(self):
+        allowed_attrs = ['addr', 'version']
+        print(self.instance)
+        networks = ['usernet']
+        for network in networks:
+            for address in self.instance['addresses'][network]:
+                self.contains_allowed_attrs(
+                    address, allowed_attrs,
+                    msg="Address")
+
+    def guest_status(self):
+        allowed_attrs = ['created_at', 'deleted', 'deleted_at', 'instance_id',
+                         'state', 'state_description', 'updated_at']
+        self.contains_allowed_attrs(
+            self.instance['guest_status'], allowed_attrs,
+            msg="Guest status")
+
+    def mgmt_volume(self):
+        if not self.volume_support:
+            return
+        allowed_attrs = ['description', 'id', 'name', 'size']
+        self.contains_allowed_attrs(
+            self.instance['volume'], allowed_attrs,
+            msg="Volume")
+
+    def replica_of(self):
+        if 'replica_of' not in self.instance:
+            self.fail("'replica_of' not found in instance.")
+        else:
+            allowed_attrs = ['id', 'links']
+            self.contains_allowed_attrs(
+                self.instance['replica_of'], allowed_attrs,
+                msg="Replica-of links not found")
+            self.links(self.instance['replica_of']['links'])
+
+    def slaves(self):
+        if 'replicas' not in self.instance:
+            self.fail("'replicas' not found in instance.")
+        else:
+            allowed_attrs = ['id', 'links']
+            for slave in self.instance['replicas']:
+                self.contains_allowed_attrs(
+                    slave, allowed_attrs,
+                    msg="Replica links not found")
+                self.links(slave['links'])
+
+    def fault(self, is_admin=False):
+        if 'fault' not in self.instance:
+            self.fail("'fault' not found in instance.")
+        else:
+            allowed_attrs = ['message', 'created', 'details']
+            self.contains_allowed_attrs(
+                self.instance['fault'], allowed_attrs,
+                msg="Fault")
+            if is_admin and not self.instance['fault']['details']:
+                self.fail("Missing fault details")
+            if not is_admin and self.instance['fault']['details']:
+                self.fail("Fault details provided for non-admin")

@@ -319,6 +319,8 @@ class Controller(object):
         webob.exc.HTTPForbidden: [
             exception.ReplicaSourceDeleteForbidden,
             exception.BackupTooLarge,
+            exception.ModuleAccessForbidden,
+            exception.ModuleAppliedToInstance,
         ],
         webob.exc.HTTPBadRequest: [
             exception.InvalidModelError,
@@ -328,6 +330,7 @@ class Controller(object):
             exception.DatabaseAlreadyExists,
             exception.UserAlreadyExists,
             exception.LocalStorageNotSpecified,
+            exception.ModuleAlreadyExists,
         ],
         webob.exc.HTTPNotFound: [
             exception.NotFound,
@@ -340,6 +343,7 @@ class Controller(object):
             exception.ClusterNotFound,
             exception.DatastoreNotFound,
             exception.SwiftNotFound,
+            exception.ModuleTypeNotFound,
         ],
         webob.exc.HTTPConflict: [
             exception.BackupNotCompleteError,

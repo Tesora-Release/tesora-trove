@@ -47,6 +47,37 @@ class InstanceCreateGroup(TestGroup):
         self.test_runner.run_initialized_instance_create()
 
     @test(runs_after=[create_initialized_instance])
+    def create_error_instance(self):
+        """Create an instance in error state."""
+        self.test_runner.run_create_error_instance()
+
+    @test(runs_after=[create_error_instance])
+    def create_error2_instance(self):
+        """Create another instance in error state."""
+        self.test_runner.run_create_error2_instance()
+
+    @test(depends_on=[create_error_instance, create_error2_instance])
+    def wait_for_error_instances(self):
+        """Wait for the error instances to fail."""
+        self.test_runner.run_wait_for_error_instances()
+
+    @test(depends_on=[wait_for_error_instances])
+    def validate_error_instance(self):
+        """Validate the error instance fault message."""
+        self.test_runner.run_validate_error_instance()
+
+    @test(depends_on=[wait_for_error_instances],
+          runs_after=[validate_error_instance])
+    def validate_error2_instance(self):
+        """Validate the error2 instance fault message as admin."""
+        self.test_runner.run_validate_error2_instance()
+
+    @test(runs_after=[validate_error_instance, validate_error2_instance])
+    def delete_error_instances(self):
+        """Delete the error instances."""
+        self.test_runner.run_delete_error_instances()
+
+    @test(runs_after=[delete_error_instances])
     def wait_for_instances(self):
         """Waiting for all instances to become active."""
         self.test_runner.wait_for_created_instances()
@@ -66,8 +97,13 @@ class InstanceCreateGroup(TestGroup):
         """Delete the initialized instance."""
         self.test_runner.run_initialized_instance_delete()
 
-    @test(depends_on=[create_initial_configuration,
-                      delete_initialized_instance])
+    @test(runs_after=[delete_initialized_instance])
+    def wait_for_error_init_delete(self):
+        """Wait for the initialized and error instances to be gone."""
+        self.test_runner.run_wait_for_error_init_delete()
+
+    @test(depends_on=[create_initial_configuration],
+          runs_after=[wait_for_error_init_delete])
     def delete_initial_configuration(self):
         """Delete the initial configuration group."""
         self.test_runner.run_initial_configuration_delete()

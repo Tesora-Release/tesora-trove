@@ -222,7 +222,7 @@ class FakeGuest(object):
     def prepare(self, memory_mb, packages, databases, users, device_path=None,
                 mount_point=None, backup_info=None, config_contents=None,
                 root_password=None, overrides=None, cluster_config=None,
-                snapshot=None):
+                snapshot=None, modules=None):
         from trove.guestagent.models import AgentHeartBeat
         from trove.instance.models import DBInstance
         from trove.instance.models import InstanceServiceStatus
@@ -241,7 +241,7 @@ class FakeGuest(object):
                 status.status = rd_instance.ServiceStatuses.RUNNING
             status.save()
             AgentHeartBeat.create(instance_id=self.id)
-        eventlet.spawn_after(3.0, update_db)
+        eventlet.spawn_after(3.5, update_db)
 
     def _set_task_status(self, new_status='RUNNING'):
         from trove.instance.models import InstanceServiceStatus
@@ -322,7 +322,7 @@ class FakeGuest(object):
             backup.checksum = 'fake-md5-sum'
             backup.size = BACKUP_SIZE
             backup.save()
-        eventlet.spawn_after(7.5, finish_create_backup)
+        eventlet.spawn_after(8.5, finish_create_backup)
 
     def mount_volume(self, device_path=None, mount_point=None):
         pass
@@ -360,6 +360,18 @@ class FakeGuest(object):
 
     def backup_required_for_replication(self):
         return True
+
+    def post_processing_required_for_replication(self):
+        return False
+
+    def module_list(self, context, include_contents=False):
+        return []
+
+    def module_apply(self, context, modules=None):
+        return []
+
+    def module_remove(self, context, module=None):
+        pass
 
 
 def get_or_create(id):

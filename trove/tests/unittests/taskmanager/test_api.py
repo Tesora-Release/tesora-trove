@@ -20,7 +20,7 @@ from mock import patch
 from trove.common import context
 from trove.common import exception
 from trove.common.rpc.version import RPC_API_VERSION
-from trove.common.strategies.cluster.experimental.mongodb.taskmanager import (
+from trove.common.strategies.cluster.mongodb.taskmanager import (
     MongoDbTaskManagerAPI)
 from trove.guestagent import models as agent_models
 from trove.taskmanager import api as task_api
@@ -89,7 +89,9 @@ class ApiTest(trove_testtools.TestCase):
         mock_heartbeat.delete.assert_called_with()
 
     @patch.object(agent_models, 'AgentHeartBeat')
-    def test_exception_delete_heartbeat(self, mock_agent_heart_beat):
+    @patch('trove.taskmanager.api.LOG')
+    def test_exception_delete_heartbeat(self, mock_logging,
+                                        mock_agent_heart_beat):
         mock_agent_heart_beat.return_value.find_by_instance_id.side_effect = (
             exception.ModelNotFoundError)
         self.api._delete_heartbeat('some-cluster-id')
@@ -117,6 +119,6 @@ class TestAPI(trove_testtools.TestCase):
         context = trove_testtools.TroveTestContext(self)
         manager = 'mongodb'
 
-        self.assertTrue(isinstance(task_api.load(context), task_api.API))
-        self.assertTrue(isinstance(task_api.load(context, manager),
-                                   MongoDbTaskManagerAPI))
+        self.assertIsInstance(task_api.load(context), task_api.API)
+        self.assertIsInstance(task_api.load(context, manager),
+                              MongoDbTaskManagerAPI)

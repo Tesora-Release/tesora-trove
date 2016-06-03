@@ -16,7 +16,7 @@
 from mock import Mock, patch
 
 from trove.cluster import models
-from trove.common.strategies.cluster.experimental.mongodb.api import (
+from trove.common.strategies.cluster.mongodb.api import (
     MongoDbCluster)
 from trove.datastore import models as datastore_models
 from trove.tests.unittests import trove_testtools
@@ -35,4 +35,4 @@ class TestClusterModel(trove_testtools.TestCase):
         dsv.manager = 'mongodb'
         mock_load_dsv_by_uuid.return_value = dsv
         cluster = models.Cluster.load(context, id)
-        self.assertTrue(isinstance(cluster, MongoDbCluster))
+        self.assertIsInstance(cluster, MongoDbCluster)

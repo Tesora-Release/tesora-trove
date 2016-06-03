@@ -121,14 +121,39 @@ class DatastoresNotFound(NotFound):
 
 class DatastoreFlavorAssociationNotFound(NotFound):
 
-    message = _("Datastore '%(datastore)s' version id %(version_id)s "
-                "and flavor %(flavor_id)s mapping not found.")
+    message = _("Flavor %(id)s is not supported for datastore "
+                "%(datastore)s version %(datastore_version)s")
 
 
 class DatastoreFlavorAssociationAlreadyExists(TroveError):
 
+    message = _("Flavor %(id)s is already associated with "
+                "datastore %(datastore)s version %(datastore_version)s")
+
+
+class DatastoreVolumeTypeAssociationNotFound(NotFound):
+
+    message = _("The volume type %(id)s is not valid for datastore "
+                "%(datastore)s and version %(version_id)s.")
+
+
+class DatastoreVolumeTypeAssociationAlreadyExists(TroveError):
+
     message = _("Datastore '%(datastore)s' version %(datastore_version)s "
-                "and flavor %(flavor_id)s mapping already exists.")
+                "and volume-type %(id)s mapping already exists.")
+
+
+class DataStoreVersionVolumeTypeRequired(TroveError):
+
+    message = _("Only specific volume types are allowed for a "
+                "datastore %(datastore)s version %(datastore_version)s. "
+                "You must specify a valid volume type.")
+
+
+class DatastoreVersionNoVolumeTypes(TroveError):
+
+    message = _("No valid volume types could be found for datastore "
+                "%(datastore)s and version %(datastore_version)s.")
 
 
 class DatastoreNoVersion(TroveError):
@@ -243,7 +268,7 @@ class CannotResizeToSameSize(TroveError):
 class VolumeAttachmentsNotFound(NotFound):
 
     message = _("Cannot find the volumes attached to compute "
-                "instance %(server_id).")
+                "instance %(server_id)s.")
 
 
 class VolumeCreationFailure(TroveError):
@@ -496,12 +521,51 @@ class ReplicaSourceDeleteForbidden(Forbidden):
                 "replicas.")
 
 
+class ModuleTypeNotFound(NotFound):
+    message = _("Module type '%(module_type)s' was not found.")
+
+
+class ModuleAppliedToInstance(BadRequest):
+
+    message = _("A module cannot be deleted or its contents modified if it "
+                "has been applied to a non-terminated instance, unless the "
+                "module has been marked as 'live_update.' "
+                "Please remove the module from all non-terminated "
+                "instances and try again.")
+
+
+class ModuleAlreadyExists(BadRequest):
+
+    message = _("A module with the name '%(name)s' already exists for "
+                "datastore '%(datastore)s' and datastore version "
+                "'%(ds_version)s'")
+
+
+class ModuleAccessForbidden(Forbidden):
+
+    message = _("You must be admin to %(action)s a module with these "
+                "options. %(options)s")
+
+
+class ModuleInvalid(Forbidden):
+
+    message = _("The module you are applying is invalid: %(reason)s")
+
+
 class ClusterNotFound(NotFound):
     message = _("Cluster '%(cluster)s' cannot be found.")
 
 
 class ClusterFlavorsNotEqual(TroveError):
     message = _("The flavor for each instance in a cluster must be the same.")
+
+
+class ClusterNetworksNotEqual(TroveError):
+    message = _("The network for each instance in a cluster must be the same.")
+
+
+class NetworkNotFound(TroveError):
+    message = _("Network Resource %(uuid)s cannot be found.")
 
 
 class ClusterVolumeSizeRequired(TroveError):
@@ -521,6 +585,22 @@ class ClusterNumInstancesNotSupported(TroveError):
 class ClusterNumInstancesNotLargeEnough(TroveError):
     message = _("The number of instances for your initial cluster must "
                 "be at least %(num_instances)s.")
+
+
+class ClusterNumInstancesBelowSafetyThreshold(TroveError):
+    message = _("The number of instances in your cluster cannot "
+                "safely be lowered below the current level based"
+                "on your current fault-tolerance settings.")
+
+
+class ClusterShrinkMustNotLeaveClusterEmpty(TroveError):
+    message = _("Must leave at least one instance in the cluster when "
+                "shrinking.")
+
+
+class ClusterShrinkInstanceInUse(TroveError):
+    message = _("Instance(s) %(id)s currently in use and cannot be deleted. "
+                "Details: %(reason)s")
 
 
 class ClusterInstanceOperationNotSupported(TroveError):

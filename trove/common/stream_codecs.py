@@ -20,12 +20,12 @@ import csv
 import json
 import re
 import six
-import StringIO
 import yaml
 
 from ConfigParser import SafeConfigParser
 
 from trove.common import utils as trove_utils
+from trove.common import xmltodict
 
 
 class StringConverter(object):
@@ -199,7 +199,7 @@ class IniCodec(StreamCodec):
 
     def serialize(self, dict_data):
         parser = self._init_config_parser(dict_data)
-        output = StringIO.StringIO()
+        output = six.StringIO()
         parser.write(output)
 
         return output.getvalue()
@@ -213,8 +213,8 @@ class IniCodec(StreamCodec):
                 for s in parser.sections()}
 
     def _pre_parse(self, stream):
-        buf = StringIO.StringIO()
-        for line in StringIO.StringIO(stream):
+        buf = six.StringIO()
+        for line in six.StringIO(stream):
             # Ignore commented lines.
             if not line.startswith(self._comment_markers):
                 # Strip leading and trailing whitespaces from each line.
@@ -261,7 +261,8 @@ class PropertiesCodec(StreamCodec):
     SKIP_INIT_SPACE = True
 
     def __init__(self, delimiter=' ', comment_markers=('#'),
-                 unpack_singletons=True, string_mappings={}):
+                 unpack_singletons=True, string_mappings=None,
+                 line_terminator='\r\n'):
         """
         :param delimiter:         A one-character used to separate fields.
         :type delimiter:          string
@@ -282,15 +283,17 @@ class PropertiesCodec(StreamCodec):
         """
         self._delimiter = delimiter
         self._comment_markers = comment_markers
-        self._string_converter = StringConverter(string_mappings)
+        self._string_converter = StringConverter(string_mappings or {})
         self._unpack_singletons = unpack_singletons
+        self._line_terminator = line_terminator
 
     def serialize(self, dict_data):
-        output = StringIO.StringIO()
+        output = six.StringIO()
         writer = csv.writer(output, delimiter=self._delimiter,
                             quoting=self.QUOTING_MODE,
                             strict=self.STRICT_MODE,
-                            skipinitialspace=self.SKIP_INIT_SPACE)
+                            skipinitialspace=self.SKIP_INIT_SPACE,
+                            lineterminator=self._line_terminator)
 
         for key, value in dict_data.items():
             writer.writerows(self._to_rows(key, value))
@@ -298,7 +301,7 @@ class PropertiesCodec(StreamCodec):
         return output.getvalue()
 
     def deserialize(self, stream):
-        reader = csv.reader(StringIO.StringIO(stream),
+        reader = csv.reader(six.StringIO(stream),
                             delimiter=self._delimiter,
                             quoting=self.QUOTING_MODE,
                             strict=self.STRICT_MODE,
@@ -368,19 +371,153 @@ class PropertiesCodec(StreamCodec):
         return container
 
 
+class KeyValueCodec(StreamCodec):
+    """
+    Read/write data from/into a simple key=value file.
+
+    key1=value1
+    key2=value2
+    key3=value3
+    ...
+
+    The above file content would be represented as:
+    {'key1': 'value1',
+     'key2': 'value2',
+     'key3': 'value3',
+     ...
+    }
+    """
+    BOOL_PYTHON = 0  # True, False
+    BOOL_LOWER = 1   # true, false
+    BOOL_UPPER = 2   # TRUE, FALSE
+
+    def __init__(self, delimiter='=',
+                 comment_marker='#',
+                 line_terminator='\r\n',
+                 value_quoting=False,
+                 value_quote_char="'",
+                 bool_case=BOOL_PYTHON,
+                 big_ints=False,
+                 hidden_marker=None):
+        """
+        :param delimiter:        string placed between key and value
+        :param comment_marker:   string indicating comment line in file
+        :param line_terminator:  string placed between lines
+        :param value_quoting:    whether or not to quote string values
+        :param value_quote_char: character used to quote string values
+        :param bool_case:        BOOL_* setting case of bool values
+        :param big_ints:         treat K/M/G at the end of ints as an int
+        :param hidden_marker:    pattern prefixing hidden param
+        """
+        self._delimeter = delimiter
+        self._comment_marker = comment_marker
+        self._line_terminator = line_terminator
+        self._value_quoting = value_quoting
+        self._value_quote_char = value_quote_char
+        self._bool_case = bool_case
+        self._big_ints = big_ints
+        self._hidden_marker = hidden_marker
+
+    def serialize(self, dict_data):
+        lines = []
+        for k, v in dict_data.items():
+            lines.append(k + self._delimeter + self.serialize_value(v))
+        return self._line_terminator.join(lines)
+
+    def deserialize(self, stream):
+        lines = stream.split(self._line_terminator)
+        result = {}
+        for line in lines:
+            line = line.lstrip().rstrip()
+            if line == '' or line.startswith(self._comment_marker):
+                continue
+            k, v = re.split(re.escape(self._delimeter), line, 1)
+            if self._value_quoting and v.startswith(self._value_quote_char):
+                # remove trailing comments
+                v = re.sub(r'%s *%s.*$' % ("'", '#'), '', v)
+                v = v.lstrip(
+                    self._value_quote_char).rstrip(
+                    self._value_quote_char)
+            else:
+                # remove trailing comments
+                v = re.sub('%s.*$' % self._comment_marker, '', v)
+            if self._hidden_marker and v.startswith(self._hidden_marker):
+                continue
+            result[k] = v
+        return result
+
+    def serialize_value(self, value):
+        if isinstance(value, bool):
+            if self._bool_case == self.BOOL_PYTHON:
+                value = str(value)
+            elif self._bool_case == self.BOOL_LOWER:
+                value = str(value).lower()
+            elif self._bool_case == self.BOOL_UPPER:
+                value = str(value).upper()
+        if self.should_quote_value(value):
+            value = self._value_quote_char + value + self._value_quote_char
+        return str(value)
+
+    def should_quote_value(self, value):
+        if not self._value_quoting:
+            return False
+        if isinstance(value, bool) or isinstance(value, int):
+            return False
+        if value.lower() in ['true', 'false']:
+            return False
+        try:
+            int(value)
+            return False
+        except ValueError:
+            pass
+        if self._big_ints and re.match(r'\d+[kKmMgG]', value):
+            return False
+        return True
+
+
 class JsonCodec(StreamCodec):
 
     def serialize(self, dict_data):
         return json.dumps(dict_data)
 
     def deserialize(self, stream):
-        return json.load(StringIO.StringIO(stream))
+        return json.load(six.StringIO(stream))
 
 
 class Base64Codec(StreamCodec):
 
+    """Serialize (encode) and deserialize (decode) using the base64 codec.
+    To read binary data from a file and b64encode it, used the decode=False
+    flag on operating_system's read calls.  Use encode=False to decode
+    binary data before writing to a file as well.
+    """
+
     def serialize(self, data):
-        return base64.b64decode(data)
+
+        try:
+            # py27str - if we've got text data, this should encode it
+            # py27aa/py34aa - if we've got a bytearray, this should work too
+            encoded = str(base64.b64encode(data).decode('utf-8'))
+        except TypeError:
+            # py34str - convert to bytes first, then we can encode
+            data_bytes = bytes([ord(item) for item in data])
+            encoded = base64.b64encode(data_bytes).decode('utf-8')
+        return encoded
 
     def deserialize(self, stream):
-        return base64.b64encode(stream)
+
+        # py27 & py34 seem to understand bytearray the same
+        return bytearray([item for item in base64.b64decode(stream)])
+
+
+class XmlCodec(StreamCodec):
+
+    def __init__(self, encoding='utf-8'):
+        self._encoding = encoding
+
+    def serialize(self, dict_data):
+        return xmltodict.unparse(
+            dict_data, output=None, encoding=self._encoding, pretty=True)
+
+    def deserialize(self, stream):
+        return xmltodict.parse(stream, encoding=self._encoding)

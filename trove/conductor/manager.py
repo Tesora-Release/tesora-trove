@@ -18,14 +18,14 @@ from oslo_service import periodic_task
 
 from trove.backup import models as bkup_models
 from trove.common import cfg
-from trove.common import exception
+from trove.common import exception as trove_exception
 from trove.common.i18n import _
 from trove.common.instance import ServiceStatus
 from trove.common.rpc import version as rpc_version
 from trove.common.serializable_notification import SerializableNotification
 from trove.conductor.models import LastSeen
 from trove.extensions.mysql import models as mysql_models
-from trove.instance import models as t_models
+from trove.instance import models as inst_models
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
@@ -44,19 +44,20 @@ class Manager(periodic_task.PeriodicTasks):
             "method": method_name,
             "sent": sent,
         }
-        LOG.debug("Instance %(instance)s sent %(method)s at %(sent)s "
-                  % fields)
 
         if sent is None:
             LOG.error(_("[Instance %s] sent field not present. Cannot "
                         "compare.") % instance_id)
             return False
 
+        LOG.debug("Instance %(instance)s sent %(method)s at %(sent)s "
+                  % fields)
+
         seen = None
         try:
             seen = LastSeen.load(instance_id=instance_id,
                                  method_name=method_name)
-        except exception.NotFound:
+        except trove_exception.NotFound:
             # This is fine.
             pass
 
@@ -77,15 +78,15 @@ class Manager(periodic_task.PeriodicTasks):
             seen.save()
             return False
 
-        else:
-            LOG.info(_("[Instance %s] Rec'd message is older than last seen. "
-                       "Discarding.") % instance_id)
-            return True
+        LOG.info(_("[Instance %s] Rec'd message is older than last seen. "
+                   "Discarding.") % instance_id)
+        return True
 
     def heartbeat(self, context, instance_id, payload, sent=None):
-        LOG.debug("Instance ID: %s" % str(instance_id))
-        LOG.debug("Payload: %s" % str(payload))
-        status = t_models.InstanceServiceStatus.find_by(
+        LOG.debug("Instance ID: %(instance)s, Payload: %(payload)s" %
+                  {"instance": str(instance_id),
+                   "payload": str(payload)})
+        status = inst_models.InstanceServiceStatus.find_by(
             instance_id=instance_id)
         if self._message_too_old(instance_id, 'heartbeat', sent):
             return
@@ -96,8 +97,9 @@ class Manager(periodic_task.PeriodicTasks):
 
     def update_backup(self, context, instance_id, backup_id,
                       sent=None, **backup_fields):
-        LOG.debug("Instance ID: %s" % str(instance_id))
-        LOG.debug("Backup ID: %s" % str(backup_id))
+        LOG.debug("Instance ID: %(instance)s, Backup ID: %(backup)s" %
+                  {"instance": str(instance_id),
+                   "backup": str(backup_id)})
         backup = bkup_models.DBBackup.find_by(id=backup_id)
         # TODO(datsun180b): use context to verify tenant matches
 
@@ -147,6 +149,4 @@ class Manager(periodic_task.PeriodicTasks):
                         message, exception):
         notification = SerializableNotification.deserialize(
             context, serialized_notification)
-        LOG.error("Guest exception on request %s:\n%s"
-                  % (notification.request_id, exception))
         notification.notify_exc_info(message, exception)

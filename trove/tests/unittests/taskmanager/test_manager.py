@@ -14,11 +14,13 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from mock import Mock, patch, PropertyMock
+from mock import ANY, DEFAULT, Mock, patch, PropertyMock
+
 from proboscis.asserts import assert_equal
 
 from trove.backup.models import Backup
 from trove.common.exception import TroveError, ReplicationSlaveAttachError
+from trove.common import server_group as srv_grp
 from trove.instance.tasks import InstanceTasks
 from trove.taskmanager.manager import Manager
 from trove.taskmanager import models
@@ -75,11 +77,19 @@ class TestManager(trove_testtools.TestCase):
 
     def test_detach_replica(self):
         slave = Mock()
-        master = Mock()
+        self.mock_master.complete_master_setup = Mock()
         with patch.object(models.BuiltInstanceTasks, 'load',
-                          side_effect=[slave, master]):
-            self.manager.detach_replica(self.context, 'some-inst-id')
-        slave.detach_replica.assert_called_with(master)
+                          side_effect=[slave, self.mock_master,
+                                       self.mock_slave1,
+                                       self.mock_slave2]):
+            with patch.multiple(
+                    self.mock_master, complete_master_setup=DEFAULT,
+                    post_processing_required_for_replication=Mock(
+                        return_value=True)):
+                self.manager.detach_replica(self.context, 'some-inst-id')
+                slave.detach_replica.assert_called_with(self.mock_master)
+                (self.mock_master.complete_master_setup.
+                    assert_called_once_with(ANY))
 
     @patch.object(Manager, '_set_task_status')
     def test_promote_to_replica_source(self, mock_set_task_status):
@@ -111,19 +121,27 @@ class TestManager(trove_testtools.TestCase):
     @patch.object(Manager, '_most_current_replica')
     def test_eject_replica_source(self, mock_most_current_replica,
                                   mock_set_task_status):
+        mock_most_current_replica.return_value = self.mock_slave1
         with patch.object(models.BuiltInstanceTasks, 'load',
                           side_effect=[self.mock_master, self.mock_slave1,
                                        self.mock_slave2]):
-            self.manager.eject_replica_source(self.context, 'some-inst-id')
-        mock_most_current_replica.assert_called_with(self.mock_master,
-                                                     [self.mock_slave1,
-                                                      self.mock_slave2])
-        mock_set_task_status.assert_called_with(([self.mock_master] +
-                                                 [self.mock_slave1,
-                                                  self.mock_slave2]),
-                                                InstanceTasks.NONE)
+            with patch.multiple(self.mock_slave1,
+                                complete_master_setup=DEFAULT,
+                                post_processing_required_for_replication=Mock(
+                                    return_value=True)):
+                self.manager.eject_replica_source(self.context,
+                                                  'some-inst-id')
+                mock_most_current_replica.assert_called_with(
+                    self.mock_master, [self.mock_slave1, self.mock_slave2])
+                mock_set_task_status.assert_called_with(([self.mock_master] +
+                                                         [self.mock_slave1,
+                                                          self.mock_slave2]),
+                                                        InstanceTasks.NONE)
+                (self.mock_slave1.complete_master_setup.
+                    assert_called_once_with(ANY))
 
     @patch.object(Manager, '_set_task_status')
+    @patch('trove.taskmanager.manager.LOG')
     def test_exception_TroveError_promote_to_replica_source(self, *args):
         self.mock_slave2.detach_replica = Mock(side_effect=TroveError)
         with patch.object(models.BuiltInstanceTasks, 'load',
@@ -135,8 +153,10 @@ class TestManager(trove_testtools.TestCase):
 
     @patch.object(Manager, '_set_task_status')
     @patch.object(Manager, '_most_current_replica')
+    @patch('trove.taskmanager.manager.LOG')
     def test_exception_TroveError_eject_replica_source(
-            self, mock_most_current_replica, mock_set_tast_status):
+            self, mock_logging, mock_most_current_replica,
+            mock_set_tast_status):
         self.mock_slave2.detach_replica = Mock(side_effect=TroveError)
         mock_most_current_replica.return_value = self.mock_slave1
         with patch.object(models.BuiltInstanceTasks, 'load',
@@ -158,7 +178,9 @@ class TestManager(trove_testtools.TestCase):
                                     self.manager.promote_to_replica_source,
                                     self.context, 'some-inst-id')
 
-    def test_error_demote_replication_master_promote_to_replica_source(self):
+    @patch('trove.taskmanager.manager.LOG')
+    def test_error_demote_replication_master_promote_to_replica_source(
+            self, mock_logging):
         self.mock_old_master.demote_replication_master = Mock(
             side_effect=RuntimeError('Error'))
 
@@ -198,7 +220,8 @@ class TestManager(trove_testtools.TestCase):
                                          'mysql', 'mysql-server', 2,
                                          'temp-backup-id', None,
                                          'some_password', None, Mock(),
-                                         'some-master-id', None, None, None)
+                                         'some-master-id', None, None, None,
+                                         None)
         mock_tasks.get_replication_master_snapshot.assert_called_with(
             self.context, 'some-master-id', mock_flavor, 'temp-backup-id',
             replica_number=1)
@@ -206,15 +229,16 @@ class TestManager(trove_testtools.TestCase):
 
     @patch.object(models.FreshInstanceTasks, 'load')
     @patch.object(Backup, 'delete')
+    @patch('trove.taskmanager.manager.LOG')
     @patch.object(models.BuiltInstanceTasks, 'load')
-    def test_exception_create_replication_slave(self, bit_mock, mock_delete,
-                                                mock_load):
+    def test_exception_create_replication_slave(self, bit_mock, mock_logging,
+                                                mock_delete, mock_load):
         mock_load.return_value.create_instance = Mock(side_effect=TroveError)
         self.assertRaises(TroveError, self.manager.create_instance,
                           self.context, ['id1', 'id2'], Mock(), Mock(),
                           Mock(), None, None, 'mysql', 'mysql-server', 2,
                           'temp-backup-id', None, 'some_password', None,
-                          Mock(), 'some-master-id', None, None, None)
+                          Mock(), 'some-master-id', None, None, None, None)
 
     def test_AttributeError_create_instance(self):
         self.assertRaisesRegexp(
@@ -222,7 +246,7 @@ class TestManager(trove_testtools.TestCase):
             self.manager.create_instance, self.context, ['id1', 'id2'],
             Mock(), Mock(), Mock(), None, None, 'mysql', 'mysql-server', 2,
             'temp-backup-id', None, 'some_password', None, Mock(), None, None,
-            None, None)
+            None, None, None)
 
     def test_create_instance(self):
         mock_tasks = Mock()
@@ -231,15 +255,14 @@ class TestManager(trove_testtools.TestCase):
         mock_csg = Mock()
         type(mock_csg.return_value).id = PropertyMock(
             return_value='sg-id')
-        mock_tasks.create_server_group = mock_csg
         with patch.object(models.FreshInstanceTasks, 'load',
                           return_value=mock_tasks):
-            self.manager.create_instance(
-                self.context, 'id1', 'inst1', mock_flavor,
-                'mysql-image-id', None, None, 'mysql',
-                'mysql-server', 2, 'temp-backup-id', None,
-                'password', None, mock_override, None, None,
-                None, 'affinity')
+            with patch.object(srv_grp.ServerGroup, 'create', mock_csg):
+                self.manager.create_instance(
+                    self.context, 'id1', 'inst1', mock_flavor,
+                    'mysql-image-id', None, None, 'mysql', 'mysql-server', 2,
+                    'temp-backup-id', None, 'password', None, mock_override,
+                    None, None, None, None, 'affinity')
         mock_tasks.create_instance.assert_called_with(mock_flavor,
                                                       'mysql-image-id', None,
                                                       None, 'mysql',
@@ -247,7 +270,7 @@ class TestManager(trove_testtools.TestCase):
                                                       'temp-backup-id', None,
                                                       'password', None,
                                                       mock_override,
-                                                      None, None, None,
+                                                      None, None, None, None,
                                                       {'group': 'sg-id'})
         mock_tasks.wait_for_instance.assert_called_with(36000, mock_flavor)
 

@@ -23,7 +23,9 @@ from trove.datastore.service import DatastoreController
 from trove.flavor.service import FlavorController
 from trove.instance.service import InstanceController
 from trove.limits.service import LimitsController
+from trove.module.service import ModuleController
 from trove.versions import VersionsController
+from trove.volume_types.service import VolumeTypesController
 
 
 class API(wsgi.Router):
@@ -35,10 +37,12 @@ class API(wsgi.Router):
         self._cluster_router(mapper)
         self._datastore_router(mapper)
         self._flavor_router(mapper)
+        self._volume_type_router(mapper)
         self._versions_router(mapper)
         self._limits_router(mapper)
         self._backups_router(mapper)
         self._configurations_router(mapper)
+        self._modules_router(mapper)
 
     def _versions_router(self, mapper):
         versions_resource = VersionsController().create_resource()
@@ -62,6 +66,13 @@ class API(wsgi.Router):
             "{version_id}/flavors",
             controller=datastore_resource,
             action="list_associated_flavors",
+            conditions={'method': ['GET']}
+        )
+        mapper.connect(
+            "/{tenant_id}/datastores/{datastore}/versions/"
+            "{version_id}/volume-types",
+            controller=datastore_resource,
+            action="list_associated_volume_types",
             conditions={'method': ['GET']}
         )
         mapper.connect("/{tenant_id}/datastores/versions/{uuid}",
@@ -114,10 +125,18 @@ class API(wsgi.Router):
                        controller=instance_resource,
                        action="guest_log_action",
                        conditions={'method': ['POST']})
-        mapper.connect("/{tenant_id}/instances/{id}/log-name/{log}",
+        mapper.connect("/{tenant_id}/instances/{id}/modules",
                        controller=instance_resource,
-                       action="guest_log_name",
+                       action="module_list",
                        conditions={'method': ['GET']})
+        mapper.connect("/{tenant_id}/instances/{id}/modules",
+                       controller=instance_resource,
+                       action="module_apply",
+                       conditions={'method': ['POST']})
+        mapper.connect("/{tenant_id}/instances/{id}/modules/{module_id}",
+                       controller=instance_resource,
+                       action="module_remove",
+                       conditions={'method': ['DELETE']})
 
     def _cluster_router(self, mapper):
         cluster_resource = ClusterController().create_resource()
@@ -158,6 +177,17 @@ class API(wsgi.Router):
                        action="show",
                        conditions={'method': ['GET']})
 
+    def _volume_type_router(self, mapper):
+        volume_type_resource = VolumeTypesController().create_resource()
+        mapper.connect("/{tenant_id}/volume-types",
+                       controller=volume_type_resource,
+                       action="index",
+                       conditions={'method': ['GET']})
+        mapper.connect("/{tenant_id}/volume-types/{id}",
+                       controller=volume_type_resource,
+                       action="show",
+                       conditions={'method': ['GET']})
+
     def _limits_router(self, mapper):
         limits_resource = LimitsController().create_resource()
         mapper.connect("/{tenant_id}/limits",
@@ -187,6 +217,36 @@ class API(wsgi.Router):
                        controller=backups_resource,
                        action="delete",
                        conditions={'method': ['DELETE']})
+
+    def _modules_router(self, mapper):
+
+        modules_resource = ModuleController().create_resource()
+        mapper.resource("modules", "/{tenant_id}/modules",
+                        controller=modules_resource)
+        mapper.connect("/{tenant_id}/modules",
+                       controller=modules_resource,
+                       action="index",
+                       conditions={'method': ['GET']})
+        mapper.connect("/{tenant_id}/modules",
+                       controller=modules_resource,
+                       action="create",
+                       conditions={'method': ['POST']})
+        mapper.connect("/{tenant_id}/modules/{id}",
+                       controller=modules_resource,
+                       action="show",
+                       conditions={'method': ['GET']})
+        mapper.connect("/{tenant_id}/modules/{id}",
+                       controller=modules_resource,
+                       action="update",
+                       conditions={'method': ['PUT']})
+        mapper.connect("/{tenant_id}/modules/{id}",
+                       controller=modules_resource,
+                       action="delete",
+                       conditions={'method': ['DELETE']})
+        mapper.connect("/{tenant_id}/modules/{id}/instances",
+                       controller=modules_resource,
+                       action="instances",
+                       conditions={'method': ['GET']})
 
     def _configurations_router(self, mapper):
         parameters_resource = ParametersController().create_resource()

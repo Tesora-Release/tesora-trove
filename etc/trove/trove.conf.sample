@@ -79,10 +79,10 @@ block_device_mapping = vdb
 device_path = /dev/vdb
 # Maximum volume size for an instance
 max_accepted_volume_size = 10
-max_instances_per_user = 5
+max_instances_per_tenant = 5
 # Maximum volume capacity (in GB) spanning across all trove volumes per tenant
-max_volumes_per_user = 100
-max_backups_per_user = 5
+max_volumes_per_tenant = 100
+max_backups_per_tenant = 5
 volume_time_out=30
 
 # Config options for rate limits
@@ -117,10 +117,6 @@ taskmanager_queue = taskmanager
 # Auth
 admin_roles = admin
 
-# Users to ignore for user create/list/delete operations
-ignore_users = os_admin, root
-ignore_dbs = lost+found, mysql, information_schema
-
 # Guest related conf
 agent_heartbeat_time = 10
 agent_call_low_timeout = 5
@@ -140,7 +136,7 @@ api_paste_config = api-paste.ini
 # notification_driver=noop
 
 # Topics used for OpenStack notifications, list value. Default is 'notifications'.
-# notification_topics=['notifications', ]
+# notification_topics=notifications
 
 # ============ Logging information =============================
 #log_dir = /integration/report
@@ -223,6 +219,11 @@ tcp_ports = 3306
 volume_support = True
 device_path = /dev/vdb
 
+# Users to ignore for user create/list/delete operations
+ignore_users = os_admin, root
+ignore_dbs = mysql, information_schema, performance_schema
+
+
 [redis]
 tcp_ports = 6379
 #redis uses local storage
@@ -253,4 +254,62 @@ volume_support = True
 device_path = /dev/vdb
 cluster_support = True
 cluster_member_count = 3
-api_strategy = trove.common.strategies.cluster.experimental.vertica.api.VerticaAPIStrategy
+api_strategy = trove.common.strategies.cluster.vertica.api.VerticaAPIStrategy
+
+
+# ============ CORS configuration =============================
+
+[cors]
+
+#
+# From oslo.middleware.cors
+#
+
+# Indicate whether this resource may be shared with the domain received in the
+# requests "origin" header. (list value)
+#allowed_origin = <None>
+
+# Indicate that the actual request can include user credentials (boolean value)
+#allow_credentials = true
+
+# Indicate which headers are safe to expose to the API. Defaults to HTTP Simple
+# Headers. (list value)
+#expose_headers = X-Auth-Token, X-Subject-Token, X-Service-Token, X-OpenStack-Request-ID
+
+# Maximum cache age of CORS preflight requests. (integer value)
+#max_age = 3600
+
+# Indicate which methods can be used during the actual request. (list value)
+#allow_methods = GET,PUT,POST,DELETE,PATCH
+
+# Indicate which header field names may be used during the actual request.
+# (list value)
+#allow_headers = X-Auth-Token, X-Identity-Status, X-Roles, X-Service-Catalog, X-User-Id, X-Tenant-Id, X-OpenStack-Request-ID
+
+
+[cors.subdomain]
+
+#
+# From oslo.middleware.cors
+#
+
+# Indicate whether this resource may be shared with the domain received in the
+# requests "origin" header. (list value)
+#allowed_origin = <None>
+
+# Indicate that the actual request can include user credentials (boolean value)
+#allow_credentials = true
+
+# Indicate which headers are safe to expose to the API. Defaults to HTTP Simple
+# Headers. (list value)
+#expose_headers = X-Auth-Token, X-Subject-Token, X-Service-Token, X-OpenStack-Request-ID
+
+# Maximum cache age of CORS preflight requests. (integer value)
+#max_age = 3600
+
+# Indicate which methods can be used during the actual request. (list value)
+#allow_methods = GET,PUT,POST,DELETE,PATCH
+
+# Indicate which header field names may be used during the actual request.
+# (list value)
+#allow_headers = X-Auth-Token, X-Identity-Status, X-Roles, X-Service-Catalog, X-User-Id, X-Tenant-Id, X-OpenStack-Request-ID

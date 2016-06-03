@@ -64,6 +64,11 @@ def build_jinja_environment():
 ENV = build_jinja_environment()
 
 
+def pagination_limit(limit, default_limit):
+    limit = int(limit or default_limit)
+    return min(limit, default_limit)
+
+
 def create_method_args_string(*args, **kwargs):
     """Returns a string representation of args and keyword args.
 
@@ -137,7 +142,7 @@ class cached_property(object):
         self.__name__ = name or func.__name__
         self.__doc__ = doc or func.__doc__
 
-    def __get__(self, obj, type=None):
+    def __get__(self, obj, owner):
         if obj is None:
             return self
         value = self.func(obj)
@@ -197,7 +202,7 @@ def build_polling_task(retriever, condition=lambda value: value,
             raise exception.PollTimeOut
 
     return loopingcall.FixedIntervalLoopingCall(
-        f=poll_and_check).start(sleep_time, True)
+        f=poll_and_check).start(sleep_time, initial_delay=False)
 
 
 def poll_until(retriever, condition=lambda value: value,
@@ -277,8 +282,70 @@ def correct_id_with_req(id, request):
     return id
 
 
-def generate_random_password(password_length=CONF.default_password_length):
-    return passlib_utils.generate_password(size=password_length)
+def generate_random_password(password_length=None, datastore=None,
+                             alpha_first=True):
+    """
+    Generate and return a random password string.
+
+    :param password_length: Length of password to create. If value is None,
+    the default_password_length set in the configuration will be used.
+    :param datastore: Datastore name to generate random password for. If
+    value is None, default values set in the configuration will be used.
+    :param alpha_first: Specify whether the generated password should begin
+    with an alphabet.
+    :return: A randomly generated password string
+    """
+    lower_case = 'abcdefghjkmnpqrstuvwxyz'
+    upper_case = 'ABCDEFGHJKMNPQRTUVWXYZ'
+    numbers = '2346789'
+    min_lower_case = cfg.get_configuration_property(
+        'password_min_lower_case', datastore)
+    min_upper_case = cfg.get_configuration_property(
+        'password_min_upper_case', datastore)
+    min_numbers = cfg.get_configuration_property(
+        'password_min_numbers', datastore)
+    min_special_chars = cfg.get_configuration_property(
+        'password_min_special_chars', datastore)
+    special_chars = cfg.get_configuration_property(
+        'password_special_charset', datastore)
+    password_length = (
+        password_length or
+        cfg.get_configuration_property('default_password_length', datastore)
+    )
+    choices = [lower_case, upper_case, numbers, special_chars]
+    mins = [min_lower_case, min_upper_case, min_numbers, min_special_chars]
+    all_choices = (lower_case + upper_case + numbers + special_chars)
+
+    password = bytearray()
+    if password_length < 1:
+        raise RuntimeError("Length cannot be less than 1")
+    total_min = 0
+    for index, value in enumerate(mins):
+        total_min += value
+        if value:
+            password.extend(passlib_utils.generate_password(
+                size=value, charset=choices[index]).encode('utf-8'))
+        if index == 1:
+            random.shuffle(password)
+    remainder = password_length - total_min
+    if total_min > password_length:
+        raise RuntimeError("Length cannot be less than %d" % total_min)
+    if remainder > 0:
+        password.extend(passlib_utils.generate_password(
+            size=password_length - total_min, charset=all_choices)
+            .encode('utf-8'))
+    if alpha_first:
+        last_part = bytearray(password[1:])
+        random.shuffle(last_part)
+        password = password[:1]
+        password.extend(last_part)
+    else:
+        random.shuffle(password)
+
+    try:
+        return password.decode('utf-8')
+    except AttributeError:
+        return str(password)
 
 
 def generate_random_string(length,
@@ -329,3 +396,42 @@ def is_collection(item):
     """
     return (isinstance(item, collections.Iterable) and
             not isinstance(item, types.StringTypes))
+
+
+def format_output(message, format_len=79, truncate_len=None, replace_index=0):
+    """Recursive function to try and keep line lengths below a certain amount,
+    so they can be displayed nicely on the command-line or UI.
+    Tries replacement patterns one at a time (in round-robin fashion)
+    that insert \n at strategic spots.
+    """
+    replacements = [['. ', '.\n'], [' (', '\n('], [': ', ':\n    ']]
+    replace_index %= len(replacements)
+    if not isinstance(message, list):
+        message = message.splitlines(1)
+    msg_list = []
+    for line in message:
+        if len(line) > format_len:
+            ok_to_split_again = False
+            for count in range(0, len(replacements)):
+                lines = line.replace(
+                    replacements[replace_index][0],
+                    replacements[replace_index][1],
+                    1
+                ).splitlines(1)
+                replace_index = (replace_index + 1) % len(replacements)
+                if len(lines) > 1:
+                    ok_to_split_again = True
+                    break
+            for item in lines:
+                # If we spilt, but a line is still too long, do it again
+                if ok_to_split_again and len(item) > format_len:
+                    item = format_output(item, format_len=format_len,
+                                         replace_index=replace_index)
+                msg_list.append(item)
+        else:
+            msg_list.append(line)
+
+    msg_str = "".join(msg_list)
+    if truncate_len and len(msg_str) > truncate_len:
+        msg_str = msg_str[:truncate_len - 3] + '...'
+    return msg_str

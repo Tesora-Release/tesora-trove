@@ -48,171 +48,50 @@
 # Tesora or display the words "Initial Development by Tesora" if the display of
 # the logo is not reasonably feasible for technical reasons.
 
-import ConfigParser
-import os
-
 import cx_Oracle
-
 from oslo_log import log as logging
 
 from trove.common import cfg
 from trove.common import exception
-from trove.common import utils as utils
 from trove.common.i18n import _
-from trove.guestagent.datastore import manager
-from trove.guestagent.datastore.oracle_ra.service import OracleAppStatus
-from trove.guestagent.datastore.oracle_ra.service import OracleAdmin
-from trove.guestagent.datastore.oracle_ra.service import OracleApp
-
+from trove.guestagent.datastore.oracle_common import manager
+from trove.guestagent.datastore.oracle_ra import service
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
-MANAGER = CONF.datastore_manager if CONF.datastore_manager else 'oracle_ra'
 
 
-class Manager(manager.Manager):
+class Manager(manager.OracleManager):
 
     def __init__(self):
-        super(Manager, self).__init__()
-
-    @property
-    def status(self):
-        return OracleAppStatus.get()
-
-    def change_passwords(self, context, users):
-        OracleAdmin().change_passwords(users)
-
-    def update_attributes(self, context, username, hostname, user_attrs):
-        OracleAdmin().update_attributes(username, hostname, user_attrs)
-
-    def reset_configuration(self, context, configuration):
-        raise exception.DatastoreOperationNotSupported(
-            operation='reset_configuration', datastore=MANAGER)
-
-    def create_database(self, context):
-        return OracleAdmin().create_database()
-
-    def create_user(self, context, users):
-        OracleAdmin().create_user(users)
-
-    def delete_database(self, context, database):
-        return OracleAdmin().delete_database(database)
-
-    def delete_user(self, context, user):
-        OracleAdmin().delete_user(user)
-
-    def get_user(self, context, username, hostname):
-        return OracleAdmin().get_user(username, hostname)
-
-    def grant_access(self, context, username, hostname, databases):
-        raise exception.DatastoreOperationNotSupported(
-            operation='grant_access', datastore=MANAGER)
-
-    def revoke_access(self, context, username, hostname, database):
-        raise exception.DatastoreOperationNotSupported(
-            operation='revoke_access', datastore=MANAGER)
-
-    def list_access(self, context, username, hostname):
-        raise exception.DatastoreOperationNotSupported(
-            operation='list_access', datastore=MANAGER)
-
-    def list_databases(self, context, limit=None, marker=None,
-                       include_marker=False):
-        raise exception.DatastoreOperationNotSupported(
-            operation='list_databases', datastore=MANAGER)
-
-    def list_users(self, context, limit=None, marker=None,
-                   include_marker=False):
-        return OracleAdmin().list_users(limit, marker,
-                                        include_marker)
-
-    def enable_root(self, context):
-        return OracleAdmin().enable_root()
-
-    def disable_root(self, context):
-        LOG.debug("Disabling root.")
-        raise exception.DatastoreOperationNotSupported(
-            operation='disable_root', datastore=MANAGER)
-
-    def is_root_enabled(self, context):
-        return OracleAdmin().is_root_enabled()
-
-    def _load_oracle_config(self, config_contents):
-        """
-        Persist the Oracle config group param values to
-        /etc/trove/trove-guestagent.conf, so that the instance can
-        recover the Oracle connectivity after rebooting.
-        """
-        TROVEGUEST_CONFIG_FILE = '/etc/trove/trove-guestagent.conf'
-        TROVEGUEST_CONFIG_FILE_TEMP = '/tmp/trove-guestagent.conf.tmp'
-
-        oracle_host = config_contents.get('oracle_host')
-        oracle_port = config_contents.get('oracle_port')
-        oracle_sys_usr = config_contents.get('sys_usr')
-        oracle_sys_pswd = config_contents.get('sys_pswd')
-        oracle_cdb_name = config_contents.get('cdb_name')
-
-        CONF.set_override(name='oracle_host',
-                          override=oracle_host,
-                          group=MANAGER)
-        CONF.set_override(name='oracle_port',
-                          override=oracle_port,
-                          group=MANAGER)
-        CONF.set_override(name='oracle_sys_usr',
-                          override=oracle_sys_usr,
-                          group=MANAGER)
-        CONF.set_override(name='oracle_sys_pswd',
-                          override=oracle_sys_pswd,
-                          group=MANAGER)
-        CONF.set_override(name='oracle_cdb_name',
-                          override=oracle_cdb_name,
-                          group=MANAGER)
-
-        config = ConfigParser.RawConfigParser()
-        config.read(TROVEGUEST_CONFIG_FILE)
-        config.add_section(MANAGER)
-        config.set(MANAGER, 'oracle_host', oracle_host)
-        config.set(MANAGER, 'oracle_port', oracle_port)
-        config.set(MANAGER, 'oracle_sys_usr', oracle_sys_usr)
-        config.set(MANAGER, 'oracle_sys_pswd', oracle_sys_pswd)
-        config.set(MANAGER, 'oracle_cdb_name', oracle_cdb_name)
-
-        with open(TROVEGUEST_CONFIG_FILE_TEMP, 'w') as configfile:
-            config.write(configfile)
-
-        utils.execute_with_timeout("sudo", "mv", "-f",
-                                   TROVEGUEST_CONFIG_FILE_TEMP,
-                                   TROVEGUEST_CONFIG_FILE)
-
-    def _create_ra_status_file(self, status):
-        RA_STATUS_FILE_TEMP = '/tmp/oracle-ra-status'
-        with open(RA_STATUS_FILE_TEMP, 'w') as statusfile:
-            statusfile.write(status)
-
-        utils.execute_with_timeout("sudo", "mv", "-f",
-                                   RA_STATUS_FILE_TEMP,
-                                   CONF.get(MANAGER).oracle_ra_status_file)
+        super(Manager, self).__init__(service.OracleRAApp,
+                                      service.OracleRAAppStatus,
+                                      manager_name='oracle_ra')
 
     def do_prepare(self, context, packages, databases, memory_mb, users,
-                device_path=None, mount_point=None, backup_info=None,
-                config_contents=None, root_password=None, overrides=None,
-                cluster_config=None, snapshot=None):
+                   device_path=None, mount_point=None, backup_info=None,
+                   config_contents=None, root_password=None, overrides=None,
+                   cluster_config=None, snapshot=None):
         """This is called from prepare in the base class."""
-        ERROR_MSG = 'Failed to create Oracle database instance.'
+        error_msg = 'Failed to create Oracle database instance.'
 
         try:
-            self._load_oracle_config(overrides)
+            config = service.OracleRAConfig()
+            config.store_ra_config(overrides)
         except Exception as e:
             LOG.exception(_('%s Invalid configuration detail.'
-                            % ERROR_MSG))
-            self._create_ra_status_file('ERROR-CONN')
+                            % error_msg))
+            self.app.create_ra_status_file('ERROR-CONN')
             raise e
 
+        app = self.app
+        admin = self.admin
+
         try:
-            self.create_database(context)
+            admin.create_pdb(CONF.guest_name)
         except cx_Oracle.DatabaseError as e:
             error, = e.args
-            LOG.exception(_(ERROR_MSG))
+            LOG.exception(_(error_msg))
             if (error.code == 1017 or
                12500 <= error.code <= 12629 or
                65006 <= error.code <= 65025):
@@ -223,83 +102,84 @@ class Manager(manager.Manager):
                 # This branch distinguish Oracle issues that occurs
                 # at the init stage, so that the user can later on
                 # delete the resultant ERROR trove instances.
-                self._create_ra_status_file('ERROR-CONN')
+                app.create_ra_status_file('ERROR-CONN')
             else:
-                self._create_ra_status_file('ERROR')
+                app.create_ra_status_file('ERROR')
             raise e
         except Exception as e:
-            LOG.exception(_(ERROR_MSG))
-            self._create_ra_status_file('ERROR')
+            LOG.exception(_(error_msg))
+            app.create_ra_status_file('ERROR')
             raise e
 
-        try:
-            if users:
-                self.create_user(context, users)
-        except Exception as e:
-            self._create_ra_status_file('ERROR')
-            LOG.exception(_(ERROR_MSG))
-            raise e
+        app.create_ra_status_file('OK')
 
-        self._create_ra_status_file('OK')
-
-    def restart(self, context):
-        raise exception.DatastoreOperationNotSupported(
-            operation='restart', datastore=MANAGER)
-
-    def start_db_with_conf_changes(self, context, config_contents):
-        raise exception.DatastoreOperationNotSupported(
-            operation='start_db_with_conf_changes', datastore=MANAGER)
-
-    def stop_db(self, context, do_not_start_on_reboot=False):
-        app = OracleApp(OracleAppStatus.get())
-        return app.stop_db(do_not_start_on_reboot=do_not_start_on_reboot)
+    def apply_overrides_on_prepare(self, context, overrides):
+        LOG.debug("Ignoring configuration for %s" % self.manager_name)
+        pass
 
     def get_filesystem_stats(self, context, fs_path):
         """Gets the filesystem stats for the path given."""
-        raise exception.DatastoreOperationNotSupported(
-            operation='get_filesystem_stats', datastore=MANAGER)
-
-    def create_backup(self, context, backup_info):
-        raise exception.DatastoreOperationNotSupported(
-            operation='create_backup', datastore=MANAGER)
+        # Oracle remote agent don't have any filesystem info to report
+        return {}
 
     def mount_volume(self, context, device_path=None, mount_point=None):
         raise exception.DatastoreOperationNotSupported(
-            operation='mount_volume', datastore=MANAGER)
+            operation='mount_volume', datastore=self.manager)
 
     def unmount_volume(self, context, device_path=None, mount_point=None):
         raise exception.DatastoreOperationNotSupported(
-            operation='unmount_volume', datastore=MANAGER)
+            operation='unmount_volume', datastore=self.manager)
 
     def resize_fs(self, context, device_path=None, mount_point=None):
         raise exception.DatastoreOperationNotSupported(
-            operation='resize_fs', datastore=MANAGER)
+            operation='resize_fs', datastore=self.manager)
+
+    def reset_configuration(self, context, configuration):
+        raise exception.DatastoreOperationNotSupported(
+            operation='reset_configuration', datastore=self.manager)
+
+    def create_database(self, context, databases):
+        raise exception.DatastoreOperationNotSupported(
+            operation='create_database', datastore=self.manager)
+
+    def delete_database(self, context, database):
+        raise exception.DatastoreOperationNotSupported(
+            operation='delete_database', datastore=self.manager)
+
+    def grant_access(self, context, username, hostname, databases):
+        raise exception.DatastoreOperationNotSupported(
+            operation='grant_access', datastore=self.manager)
+
+    def revoke_access(self, context, username, hostname, database):
+        raise exception.DatastoreOperationNotSupported(
+            operation='revoke_access', datastore=self.manager)
+
+    def list_access(self, context, username, hostname):
+        raise exception.DatastoreOperationNotSupported(
+            operation='list_access', datastore=self.manager)
+
+    def list_databases(self, context, limit=None, marker=None,
+                       include_marker=False):
+        raise exception.DatastoreOperationNotSupported(
+            operation='list_databases', datastore=self.manager)
+
+    def disable_root(self, context):
+        LOG.debug("Disabling root.")
+        raise exception.DatastoreOperationNotSupported(
+            operation='disable_root', datastore=self.manager)
+
+    def restart(self, context):
+        raise exception.DatastoreOperationNotSupported(
+            operation='restart', datastore=self.manager)
+
+    def start_db_with_conf_changes(self, context, config_contents):
+        raise exception.DatastoreOperationNotSupported(
+            operation='start_db_with_conf_changes', datastore=self.manager)
 
     def update_overrides(self, context, overrides, remove=False):
         raise exception.DatastoreOperationNotSupported(
-            operation='update_overrides', datastore=MANAGER)
+            operation='update_overrides', datastore=self.manager)
 
     def apply_overrides(self, context, overrides):
         raise exception.DatastoreOperationNotSupported(
-            operation='apply_overrides', datastore=MANAGER)
-
-    def get_replication_snapshot(self, context, snapshot_info,
-                                 replica_source_config=None):
-        raise exception.DatastoreOperationNotSupported(
-            operation='get_replication_snapshot', datastore=MANAGER)
-
-    def attach_replication_slave(self, context, snapshot, slave_config):
-        raise exception.DatastoreOperationNotSupported(
-            operation='attach_replication_slave', datastore=MANAGER)
-
-    def detach_replica(self, context, for_failover=False):
-        raise exception.DatastoreOperationNotSupported(
-            operation='detach_replica', datastore=MANAGER)
-
-    def cleanup_source_on_replica_detach(self, context, replica_info):
-        raise exception.DatastoreOperationNotSupported(
-            operation='cleanup_source_on_replica_detach', datastore=MANAGER)
-
-    def demote_replication_master(self, context):
-        raise exception.DatastoreOperationNotSupported(
-            operation='demote_replication_master', datastore=MANAGER)
+            operation='apply_overrides', datastore=self.manager)

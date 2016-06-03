@@ -27,9 +27,9 @@ from oslo_utils import netutils
 from trove.common import utils
 from trove.guestagent import backup
 from trove.guestagent.common import operating_system
-from trove.guestagent.datastore.experimental.couchbase import (
+from trove.guestagent.datastore.couchbase import (
     manager as couch_manager)
-from trove.guestagent.datastore.experimental.couchbase import (
+from trove.guestagent.datastore.couchbase import (
     service as couch_service)
 from trove.guestagent import volume
 from trove.tests.unittests import trove_testtools
@@ -57,7 +57,7 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
 
     def test_update_status(self):
         mock_status = MagicMock()
-        self.manager.appStatus = mock_status
+        self.manager.app.status = mock_status
         self.manager.update_status(self.context)
         mock_status.update.assert_any_call()
 
@@ -71,7 +71,9 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                     install_if_needed=DEFAULT,
                     start_db_with_conf_changes=DEFAULT,
                     init_storage_structure=DEFAULT,
-                    apply_initial_guestagent_configuration=DEFAULT)
+                    initialize_node=DEFAULT,
+                    apply_post_restore_updates=DEFAULT,
+                    secure=DEFAULT)
     @patch.multiple(volume.VolumeDevice,
                     format=DEFAULT,
                     mount=DEFAULT,
@@ -88,7 +90,7 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
 
         mock_status = MagicMock()
         mock_status.begin_install = MagicMock(return_value=None)
-        self.manager.appStatus = mock_status
+        self.manager.app.status = mock_status
 
         instance_ram = 2048
         mount_point = '/var/lib/couchbase'
@@ -110,19 +112,23 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
         mock_status.begin_install.assert_any_call()
 
         storage_mock = kwmocks['init_storage_structure']
-        init_mock = kwmocks['apply_initial_guestagent_configuration']
-        init_mock.assert_called_once_with(None)
+        init_mock = kwmocks['initialize_node']
+        init_mock.assert_called_once_with()
         storage_mock.assert_called_once_with(mount_point)
         kwmocks['install_if_needed'].assert_any_call(self.packages)
 
         if backup_info:
-            backup.restore.assert_any_call(self.context,
-                                           backup_info,
-                                           mount_point)
+            backup.restore.assert_called_once_with(self.context,
+                                                   backup_info,
+                                                   mount_point)
+            kwmocks['apply_post_restore_updates'].assert_called_once_with(
+                backup_info)
+        kwmocks['secure'].assert_called_once_with(initialize=True,
+                                                  password=None)
 
     def test_restart(self):
         mock_status = MagicMock()
-        self.manager.appStatus = mock_status
+        self.manager.app.status = mock_status
         couch_service.CouchbaseApp.restart = MagicMock(return_value=None)
         # invocation
         self.manager.restart(self.context)
@@ -131,7 +137,7 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
 
     def test_stop_db(self):
         mock_status = MagicMock()
-        self.manager.appStatus = mock_status
+        self.manager.app.status = mock_status
         couch_service.CouchbaseApp.stop_db = MagicMock(return_value=None)
         # invocation
         self.manager.stop_db(self.context)
@@ -161,15 +167,17 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                                self.__fake_mkstemp):
             self.addCleanup(self.__cleanup_tempfile)
 
-            rootaccess = couch_service.CouchbaseRootAccess()
-            rootaccess.write_password_to_file('mypassword')
+            app = couch_service.CouchbaseApp()
+            app._write_password_to_file('mypassword')
 
             filepermissions = os.stat(self.tempname).st_mode
             self.assertEqual(stat.S_IRUSR, filepermissions & 0o777)
 
     @mock.patch.object(utils, 'execute_with_timeout',
                        Mock(return_value=('0', '')))
-    def test_write_password_to_file2(self):
+    @mock.patch(
+        'trove.guestagent.datastore.couchbase.service.LOG')
+    def test_write_password_to_file2(self, mock_logging):
         self.original_mkstemp = tempfile.mkstemp
         self.tempname = None
 
@@ -177,10 +185,10 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                                'mkstemp',
                                self.__fake_mkstemp_raise):
 
-            rootaccess = couch_service.CouchbaseRootAccess()
+            app = couch_service.CouchbaseApp()
 
             self.assertRaises(RuntimeError,
-                              rootaccess.write_password_to_file,
+                              app._write_password_to_file,
                               'mypassword')
 
     @mock.patch.object(operating_system, 'create_directory')
@@ -191,3 +199,22 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
         mkdir_mock.assert_called_once_with(
             mount_point, user=app.couchbase_owner, group=app.couchbase_owner,
             as_root=True)
+
+    def test_build_command_options(self):
+        app = couch_service.CouchbaseApp(Mock())
+        opts = app.build_admin()._build_command_options({'bucket': 'bucket1',
+                                                         'bucket-replica': 0,
+                                                         'wait': None})
+        self.assertEqual(
+            set(['--bucket=bucket1', '--bucket-replica=0', '--wait']),
+            set(opts))
+
+    def test_parse_bucket_list(self):
+        app = couch_service.CouchbaseApp(Mock())
+        bucket_list = app.build_admin()._parse_bucket_list(
+            "bucket1\n saslPassword: password1\n ramQuota: 268435456\n"
+            "bucket2\n saslPassword: password2\n ramQuota: 134217728")
+        self.assertEqual({'bucket1': {'saslPassword': 'password1',
+                                      'ramQuota': '268435456'},
+                          'bucket2': {'saslPassword': 'password2',
+                                      'ramQuota': '134217728'}}, bucket_list)
