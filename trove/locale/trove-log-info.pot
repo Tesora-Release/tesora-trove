@@ -46,7 +46,7 @@ msgstr ""
 msgid "Enabling root for cluster '%s'."
 msgstr ""
 
-#: trove/guestagent/datastore/vertica/service.py:281
+#: trove.guestagent.datastore/vertica/service.py:281
 msgid "Enabling root."
 msgstr ""
 
