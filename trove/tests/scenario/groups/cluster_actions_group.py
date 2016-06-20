@@ -16,9 +16,16 @@
 from proboscis import test
 
 from trove.tests.scenario.groups.test_group import TestGroup
+from trove.tests.scenario.runners import test_runners
 
 
 GROUP = "scenario.cluster_actions_group"
+
+
+class ClusterActionsRunnerFactory(test_runners.RunnerFactory):
+
+    _runner_ns = 'cluster_actions_runners'
+    _runner_cls = 'ClusterActionsRunner'
 
 
 @test(groups=[GROUP])
@@ -26,12 +33,22 @@ class ClusterActionsGroup(TestGroup):
 
     def __init__(self):
         super(ClusterActionsGroup, self).__init__(
-            'cluster_actions_runners', 'ClusterActionsRunner')
+            ClusterActionsRunnerFactory.instance())
 
     @test
     def cluster_create(self):
         """Create a cluster."""
         self.test_runner.run_cluster_create()
+
+    @test(depends_on=[cluster_create])
+    def cluster_list(self):
+        """List the clusters."""
+        self.test_runner.run_cluster_list()
+
+    @test(depends_on=[cluster_create])
+    def cluster_show(self):
+        """Show a cluster."""
+        self.test_runner.run_cluster_show()
 
     @test(depends_on=[cluster_create])
     def add_initial_cluster_data(self):
@@ -54,7 +71,8 @@ class ClusterActionsGroup(TestGroup):
         self.test_runner.run_verify_cluster_root_enable()
 
     @test(depends_on=[cluster_create],
-          runs_after=[verify_initial_cluster_data, verify_cluster_root_enable])
+          runs_after=[verify_initial_cluster_data, verify_cluster_root_enable,
+                      cluster_list, cluster_show])
     def cluster_grow(self):
         """Grow cluster."""
         self.test_runner.run_cluster_grow()

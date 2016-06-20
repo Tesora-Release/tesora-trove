@@ -106,8 +106,6 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                                  overrides=None,
                                  cluster_config=None)
 
-            available_ram_mock.assert_called_once_with(instance_ram)
-
         # verification/assertion
         mock_status.begin_install.assert_any_call()
 
@@ -218,3 +216,14 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                                       'ramQuota': '268435456'},
                           'bucket2': {'saslPassword': 'password2',
                                       'ramQuota': '134217728'}}, bucket_list)
+
+    def test_ramsize_quota_mb(self):
+        app = couch_service.CouchbaseApp(Mock())
+
+        with patch.object(couch_service.CouchbaseApp, 'available_ram_mb',
+                          new_callable=PropertyMock) as available_ram_mock:
+            available_ram_mock.return_value = 1024
+            self.assertEqual('819', str(app.ramsize_quota_mb))
+
+            available_ram_mock.return_value = 128
+            self.assertEqual('256', str(app.ramsize_quota_mb))
