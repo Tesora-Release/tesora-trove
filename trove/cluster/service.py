@@ -25,7 +25,6 @@ from trove.common.i18n import _
 from trove.common import notification
 from trove.common.notification import StartNotification
 from trove.common import pagination
-from trove.common.strategies.cluster import strategy
 from trove.common import utils
 from trove.common import wsgi
 from trove.datastore import models as datastore_models
@@ -42,7 +41,7 @@ class ClusterController(wsgi.Controller):
 
     @classmethod
     def get_action_schema(cls, body, action_schema):
-        action_type = body.keys()[0]
+        action_type = list(body.keys())[0]
         return action_schema.get(action_type, {})
 
     @classmethod
@@ -53,54 +52,30 @@ class ClusterController(wsgi.Controller):
         return action_schema
 
     def action(self, req, body, tenant_id, id):
-        LOG.debug("Committing Action Against Cluster for "
-                  "Tenant '%s'" % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
-        LOG.info(_("id : '%s'\n\n") % id)
-
+        LOG.debug(("Committing Action Against Cluster for "
+                   "Tenant '%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\nid : '%(id)s'\n\n") %
+                  {"req": req, "id": id, "tenant_id": tenant_id})
         if not body:
             raise exception.BadRequest(_("Invalid request body."))
 
+        if len(body) != 1:
+            raise exception.BadRequest(_("Action request should have exactly"
+                                         " one action specified in body"))
         context = req.environ[wsgi.CONTEXT_KEY]
         cluster = models.Cluster.load(context, id)
-        manager = cluster.datastore_version.manager
-        api_strategy = strategy.load_api_strategy(manager)
-        _actions = api_strategy.cluster_controller_actions
+        cluster.action(context, req, *body.items()[0])
 
-        def find_action_key():
-            for key in body:
-                if key in _actions:
-                    return key
-            else:
-                message = _("No action '%(action)s' supplied "
-                            "by strategy for manager '%(manager)s'") % (
-                                {'action': key, 'manager': manager})
-                raise exception.TroveError(message)
-
-        action_key = find_action_key()
-        if action_key == 'grow':
-            context.notification = notification.DBaaSClusterGrow(context,
-                                                                 request=req)
-        elif action_key == 'shrink':
-            context.notification = notification.DBaaSClusterShrink(context,
-                                                                   request=req)
-        with StartNotification(context, cluster_id=id):
-            selected_action = _actions[action_key]
-            cluster = selected_action(cluster, body)
-
-        if cluster:
-            view = views.load_view(cluster, req=req, load_servers=False)
-            wsgi_result = wsgi.Result(view.data(), 202)
-        else:
-            wsgi_result = wsgi.Result(None, 202)
+        view = views.load_view(cluster, req=req, load_servers=False)
+        wsgi_result = wsgi.Result(view.data(), 202)
 
         return wsgi_result
 
     def show(self, req, tenant_id, id):
         """Return a single cluster."""
-        LOG.debug("Showing a Cluster for Tenant '%s'" % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
-        LOG.info(_("id : '%s'\n\n") % id)
+        LOG.debug(("Showing a Cluster for Tenant '%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\nid : '%(id)s'\n\n") %
+                  {"req": req, "id": id, "tenant_id": tenant_id})
 
         context = req.environ[wsgi.CONTEXT_KEY]
         cluster = models.Cluster.load(context, id)
@@ -108,11 +83,14 @@ class ClusterController(wsgi.Controller):
 
     def show_instance(self, req, tenant_id, cluster_id, instance_id):
         """Return a single instance belonging to a cluster."""
-        LOG.debug("Showing an Instance in a Cluster for Tenant '%s'"
-                  % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
-        LOG.info(_("cluster_id : '%s'\n\n") % cluster_id)
-        LOG.info(_("instance_id : '%s'\n\n") % instance_id)
+        LOG.debug(("Showing an Instance in a Cluster for Tenant "
+                   "'%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\n"
+                   "cluster_id : '%(cluster_id)s'\n\n"
+                   "instance_id : '%(instance_id)s;\n\n") %
+                  {"req": req, "tenant_id": tenant_id,
+                   "cluster_id": cluster_id,
+                   "instance_id": instance_id})
 
         context = req.environ[wsgi.CONTEXT_KEY]
         cluster = models.Cluster.load(context, cluster_id)
@@ -123,9 +101,9 @@ class ClusterController(wsgi.Controller):
 
     def delete(self, req, tenant_id, id):
         """Delete a cluster."""
-        LOG.debug("Deleting a Cluster for Tenant '%s'" % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
-        LOG.info(_("id : '%s'\n\n") % id)
+        LOG.debug(("Deleting a Cluster for Tenant '%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\nid : '%(id)s'\n\n") %
+                  {"req": req, "id": id, "tenant_id": tenant_id})
 
         context = req.environ[wsgi.CONTEXT_KEY]
         cluster = models.Cluster.load(context, id)
@@ -137,8 +115,9 @@ class ClusterController(wsgi.Controller):
 
     def index(self, req, tenant_id):
         """Return a list of clusters."""
-        LOG.debug("Showing a list of clusters for Tenant '%s'" % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
+        LOG.debug(("Showing a list of clusters for Tenant '%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\n") % {"req": req,
+                                             "tenant_id": tenant_id})
 
         context = req.environ[wsgi.CONTEXT_KEY]
         if not context.is_admin and context.tenant != tenant_id:
@@ -152,9 +131,9 @@ class ClusterController(wsgi.Controller):
         return wsgi.Result(paged.data(), 200)
 
     def create(self, req, body, tenant_id):
-        LOG.debug("Creating a Cluster for Tenant '%s'" % tenant_id)
-        LOG.info(_("req : '%s'\n\n") % req)
-        LOG.info(_("body : '%s'\n\n") % body)
+        LOG.debug(("Creating a Cluster for Tenant '%(tenant_id)s'\n"
+                   "req : '%(req)s'\n\nbody : '%(body)s'\n\n") %
+                  {"tenant_id": tenant_id, "req": req, "body": body})
 
         context = req.environ[wsgi.CONTEXT_KEY]
         name = body['cluster']['name']
@@ -181,6 +160,7 @@ class ClusterController(wsgi.Controller):
         for node in nodes:
             flavor_id = utils.get_id_from_href(node['flavorRef'])
             volume_size = volume_type = nics = availability_zone = None
+            modules = None
             if 'volume' in node:
                 volume_size = int(node['volume']['size'])
                 volume_type = node['volume'].get('volume_type')
@@ -188,12 +168,26 @@ class ClusterController(wsgi.Controller):
                 nics = node['nics']
             if 'availability_zone' in node:
                 availability_zone = node['availability_zone']
+            if 'modules' in node:
+                modules = node['modules']
 
             instances.append({"flavor_id": flavor_id,
                               "volume_size": volume_size,
                               "volume_type": volume_type,
                               "nics": nics,
-                              "availability_zone": availability_zone})
+                              "availability_zone": availability_zone,
+                              'region_name': node.get('region_name'),
+                              "modules": modules})
+
+        locality = body['cluster'].get('locality')
+        if locality:
+            locality_domain = ['affinity', 'anti-affinity']
+            locality_domain_msg = ("Invalid locality '%s'. "
+                                   "Must be one of ['%s']" %
+                                   (locality,
+                                    "', '".join(locality_domain)))
+            if locality not in locality_domain:
+                raise exception.BadRequest(msg=locality_domain_msg)
 
         context.notification = notification.DBaaSClusterCreate(context,
                                                                request=req)
@@ -201,6 +195,8 @@ class ClusterController(wsgi.Controller):
                                datastore_version=datastore_version.name):
             cluster = models.Cluster.create(context, name, datastore,
                                             datastore_version, instances,
-                                            extended_properties)
+                                            extended_properties,
+                                            locality)
+        cluster.locality = locality
         view = views.load_view(cluster, req=req, load_servers=False)
         return wsgi.Result(view.data(), 200)

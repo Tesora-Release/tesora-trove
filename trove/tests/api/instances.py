@@ -67,8 +67,7 @@ GROUP_SECURITY_GROUPS = "dbaas.api.security_groups"
 GROUP_CREATE_INSTANCE_FAILURE = "dbaas.api.failures"
 GROUP_QUOTAS = "dbaas.quotas"
 
-# FIXME(amrith) This is temporary fix - set timeout to 62 minutes
-TIMEOUT_INSTANCE_CREATE = 60 * 62
+TIMEOUT_INSTANCE_CREATE = 60 * 32
 TIMEOUT_INSTANCE_DELETE = 120
 
 
@@ -86,6 +85,7 @@ class InstanceTestInfo(object):
         self.id = None  # The ID of the instance in the database.
         self.local_id = None
         self.address = None
+        self.nics = None  # The dict of type/id for nics used on the intance.
         self.initial_result = None  # The initial result from the create call.
         self.user_ip = None  # The IP address of the instance, given to user.
         self.infra_ip = None  # The infrastructure network IP address.
@@ -240,8 +240,8 @@ class CreateInstanceQuotaTest(unittest.TestCase):
         self.test_info.dbaas_datastore = CONFIG.dbaas_datastore
 
     def tearDown(self):
-        quota_dict = {'instances': CONFIG.trove_max_instances_per_user,
-                      'volumes': CONFIG.trove_max_volumes_per_user}
+        quota_dict = {'instances': CONFIG.trove_max_instances_per_tenant,
+                      'volumes': CONFIG.trove_max_volumes_per_tenant}
         dbaas_admin.quota.update(self.test_info.user.tenant_id,
                                  quota_dict)
 
@@ -283,7 +283,7 @@ class CreateInstanceQuotaTest(unittest.TestCase):
         self.test_info.volume = None
 
         if VOLUME_SUPPORT:
-            assert_equal(CONFIG.trove_max_volumes_per_user,
+            assert_equal(CONFIG.trove_max_volumes_per_tenant,
                          verify_quota['volumes'])
             self.test_info.volume = {'size':
                                      CONFIG.get('trove_volume_size', 1)}
@@ -480,7 +480,7 @@ class CreateInstanceFail(object):
                              'hostname', 'id', 'name', 'datastore',
                              'server_state_description', 'status', 'updated',
                              'users', 'volume', 'root_enabled_at',
-                             'root_enabled_by']
+                             'root_enabled_by', 'fault']
             with CheckInstance(result._info) as check:
                 check.contains_allowed_attrs(
                     result._info, allowed_attrs,
@@ -657,6 +657,10 @@ class CreateInstance(object):
         else:
             instance_info.volume = None
 
+        shared_network = CONFIG.get('shared_network', None)
+        if shared_network:
+            instance_info.nics = [{'net-id': shared_network}]
+
         if create_new_instance():
             instance_info.initial_result = dbaas.instances.create(
                 instance_info.name,
@@ -664,6 +668,7 @@ class CreateInstance(object):
                 instance_info.volume,
                 databases,
                 users,
+                nics=instance_info.nics,
                 availability_zone="nova",
                 datastore=instance_info.dbaas_datastore,
                 datastore_version=instance_info.dbaas_datastore_version)
@@ -687,7 +692,8 @@ class CreateInstance(object):
 
         # Check these attrs only are returned in create response
         allowed_attrs = ['created', 'flavor', 'addresses', 'id', 'links',
-                         'name', 'status', 'updated', 'datastore']
+                         'name', 'status', 'updated', 'datastore', 'fault',
+                         'region']
         if ROOT_ON_CREATE:
             allowed_attrs.append('password')
         if VOLUME_SUPPORT:
@@ -857,9 +863,6 @@ class AfterInstanceCreation(unittest.TestCase):
     def test_root_create_root_user_after_create(self):
         assert_unprocessable(dbaas.root.create, instance_info.id)
 
-    # def test_root_delete_root_user_after_create(self):
-    #     assert_unprocessable(dbaas.root.delete, instance_info.id)
-
     def test_root_is_root_enabled_after_create(self):
         assert_unprocessable(dbaas.root.is_root_enabled, instance_info.id)
 
@@ -943,8 +946,10 @@ class SecurityGroupsTest(object):
     def setUp(self):
         self.testSecurityGroup = dbaas.security_groups.get(
             instance_info.id)
-        self.secGroupName = "SecGroup_%s" % instance_info.id
-        self.secGroupDescription = "Security Group for %s" % instance_info.id
+        self.secGroupName = "dbaas_secgroup_%s" % instance_info.id
+        self.secGroupDescription = "Created by Trove DBaaS, Do Not " \
+                                   "Delete.\nSecurity Group for %s" \
+                                   % instance_info.id
 
     @test
     def test_created_security_group(self):
@@ -989,8 +994,10 @@ class SecurityGroupsRulesTest(object):
     def setUp(self):
         self.testSecurityGroup = dbaas.security_groups.get(
             instance_info.id)
-        self.secGroupName = "SecGroup_%s" % instance_info.id
-        self.secGroupDescription = "Security Group for %s" % instance_info.id
+        self.secGroupName = "dbaas_secgroup_%s" % instance_info.id
+        self.secGroupDescription = "Created by Trove DBaaS, Do Not " \
+                                   "Delete.\nSecurity Group for %s" \
+                                   % instance_info.id
         self.orig_allowable_empty_sleeps = (event_simulator.
                                             allowable_empty_sleeps)
         event_simulator.allowable_empty_sleeps = 2
@@ -1132,7 +1139,8 @@ class TestInstanceListing(object):
     @test
     def test_index_list(self):
         allowed_attrs = ['id', 'links', 'name', 'status', 'flavor',
-                         'datastore', 'ip', 'hostname', 'replica_of']
+                         'datastore', 'ip', 'hostname', 'replica_of',
+                         'region']
         if VOLUME_SUPPORT:
             allowed_attrs.append('volume')
         instances = dbaas.instances.list()
@@ -1153,7 +1161,7 @@ class TestInstanceListing(object):
     def test_get_instance(self):
         allowed_attrs = ['created', 'databases', 'flavor', 'hostname', 'id',
                          'links', 'name', 'status', 'updated', 'ip',
-                         'datastore']
+                         'datastore', 'fault', 'region']
         if VOLUME_SUPPORT:
             allowed_attrs.append('volume')
         else:
@@ -1241,7 +1249,7 @@ class TestInstanceListing(object):
                          'flavor', 'guest_status', 'host', 'hostname', 'id',
                          'name', 'root_enabled_at', 'root_enabled_by',
                          'server_state_description', 'status', 'datastore',
-                         'updated', 'users', 'volume']
+                         'updated', 'users', 'volume', 'fault', 'region']
         with CheckInstance(result._info) as check:
             check.contains_allowed_attrs(
                 result._info, allowed_attrs,
@@ -1581,7 +1589,7 @@ class CheckInstance(AttrCheck):
             self.instance['volume'], allowed_attrs,
             msg="Volume")
 
-    def slave_of(self):
+    def replica_of(self):
         if 'replica_of' not in self.instance:
             self.fail("'replica_of' not found in instance.")
         else:

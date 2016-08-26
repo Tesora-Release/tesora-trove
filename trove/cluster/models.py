@@ -21,8 +21,12 @@ from trove.cluster.tasks import ClusterTasks
 from trove.common import cfg
 from trove.common import exception
 from trove.common.i18n import _
+from trove.common.notification import DBaaSClusterGrow, DBaaSClusterShrink
+from trove.common.notification import StartNotification
 from trove.common import remote
+from trove.common import server_group as srv_grp
 from trove.common.strategies.cluster import strategy
+from trove.common import utils
 from trove.datastore import models as datastore_models
 from trove.db import models as dbmodels
 from trove.instance import models as inst_models
@@ -86,6 +90,9 @@ class Cluster(object):
             self.ds = (datastore_models.Datastore.
                        load(self.ds_version.datastore_id))
         self._db_instances = None
+        self._server_group = None
+        self._server_group_loaded = False
+        self._locality = None
 
     @classmethod
     def get_guest(cls, instance):
@@ -97,9 +104,7 @@ class Cluster(object):
     def load_all(cls, context, tenant_id):
         db_infos = DBCluster.find_all(tenant_id=tenant_id,
                                       deleted=False)
-        limit = int(context.limit or Cluster.DEFAULT_LIMIT)
-        if limit > Cluster.DEFAULT_LIMIT:
-            limit = Cluster.DEFAULT_LIMIT
+        limit = utils.pagination_limit(context.limit, Cluster.DEFAULT_LIMIT)
         data_view = DBCluster.find_by_pagination('clusters', db_infos, "foo",
                                                  limit=limit,
                                                  marker=context.marker)
@@ -181,7 +186,7 @@ class Cluster(object):
 
     @property
     def db_instances(self):
-        """DBInstance objects are persistant, therefore cacheable."""
+        """DBInstance objects are persistent, therefore cacheable."""
         if not self._db_instances:
             self._db_instances = inst_models.DBInstance.find_all(
                 cluster_id=self.id, deleted=False).all()
@@ -197,13 +202,39 @@ class Cluster(object):
         return inst_models.Instances.load_all_by_cluster_id(
             self.context, self.db_info.id, load_servers=False)
 
+    @property
+    def server_group(self):
+        # The server group could be empty, so we need a flag to cache it
+        if not self._server_group_loaded and self.instances:
+            self._server_group = self.instances[0].server_group
+            self._server_group_loaded = True
+        return self._server_group
+
+    @property
+    def locality(self):
+        if not self._locality and not self._server_group_loaded:
+            if self.server_group:
+                self._locality = srv_grp.ServerGroup.get_locality(
+                    self._server_group)
+        return self._locality
+
+    @locality.setter
+    def locality(self, value):
+        """This is to facilitate the fact that the server group may not be
+        set up before the create command returns.
+        """
+        self._locality = value
+
     @classmethod
     def create(cls, context, name, datastore, datastore_version,
-               instances, extended_properties):
+               instances, extended_properties, locality):
+        locality = srv_grp.ServerGroup.build_scheduler_hint(
+            context, locality, name)
         api_strategy = strategy.load_api_strategy(datastore_version.manager)
         return api_strategy.cluster_class.create(context, name, datastore,
                                                  datastore_version, instances,
-                                                 extended_properties)
+                                                 extended_properties,
+                                                 locality)
 
     def validate_cluster_available(self, valid_states=[ClusterTasks.NONE]):
         if self.db_info.task_status not in valid_states:
@@ -223,11 +254,52 @@ class Cluster(object):
 
         self.update_db(task_status=ClusterTasks.DELETING)
 
+        # we force the server-group delete here since we need to load the
+        # group while the instances still exist. Also, since the instances
+        # take a while to be removed they might not all be gone even if we
+        # do it after the delete.
+        srv_grp.ServerGroup.delete(self.context, self.server_group, force=True)
         for db_inst in db_insts:
             instance = inst_models.load_any_instance(self.context, db_inst.id)
             instance.delete()
 
         task_api.API(self.context).delete_cluster(self.id)
+
+    def action(self, context, req, action, param):
+        if action == 'grow':
+            context.notification = DBaaSClusterGrow(context, request=req)
+            with StartNotification(context, cluster_id=self.id):
+                instances = []
+                for node in param:
+                    instance = {
+                        'flavor_id': utils.get_id_from_href(node['flavorRef'])
+                    }
+                    if 'name' in node:
+                        instance['name'] = node['name']
+                    if 'volume' in node:
+                        instance['volume_size'] = int(node['volume']['size'])
+                    if 'modules' in node:
+                        instance['modules'] = node['modules']
+                    if 'nics' in node:
+                        instance['nics'] = node['nics']
+                    if 'availability_zone' in node:
+                        instance['availability_zone'] = (
+                            node['availability_zone'])
+                    instances.append(instance)
+                return self.grow(instances)
+        elif action == 'shrink':
+            context.notification = DBaaSClusterShrink(context, request=req)
+            with StartNotification(context, cluster_id=self.id):
+                instance_ids = [instance['id'] for instance in param]
+                return self.shrink(instance_ids)
+        else:
+            raise exception.BadRequest(_("Action %s not supported") % action)
+
+    def grow(self, instances):
+        raise exception.BadRequest(_("Action 'grow' not supported"))
+
+    def shrink(self, instance_ids):
+        raise exception.BadRequest(_("Action 'shrink' not supported"))
 
     @staticmethod
     def load_instance(context, cluster_id, instance_id):
@@ -249,25 +321,31 @@ def is_cluster_deleting(context, cluster_id):
             cluster.db_info.task_status == ClusterTasks.SHRINKING_CLUSTER)
 
 
-def get_flavors_from_instance_defs(context, instances,
-                                   volume_enabled, ephemeral_enabled):
-    """Load and validate flavors for given instance definitions."""
-    flavors = dict()
-    nova_client = remote.create_nova_client(context)
+def validate_instance_flavors(context, instances,
+                              volume_enabled, ephemeral_enabled):
+    """Validate flavors for given instance definitions."""
+    nova_cli_cache = dict()
     for instance in instances:
+        region_name = instance.get('region_name')
         flavor_id = instance['flavor_id']
-        if flavor_id not in flavors:
-            try:
-                flavor = nova_client.flavors.get(flavor_id)
-                if (not volume_enabled and
-                        (ephemeral_enabled and flavor.ephemeral == 0)):
-                    raise exception.LocalStorageNotSpecified(
-                        flavor=flavor_id)
-                flavors[flavor_id] = flavor
-            except nova_exceptions.NotFound:
-                raise exception.FlavorNotFound(uuid=flavor_id)
+        try:
+            if region_name is None:
+                nova_client = remote.create_nova_client(context, region_name)
+            else:
+                if region_name not in nova_cli_cache:
+                    nova_client = remote.create_nova_client(
+                        context, region_name)
+                    nova_cli_cache[region_name] = nova_client
+                else:
+                    nova_client = nova_cli_cache[region_name]
 
-    return flavors
+            flavor = nova_client.flavors.get(flavor_id)
+            if (not volume_enabled and
+                    (ephemeral_enabled and flavor.ephemeral == 0)):
+                raise exception.LocalStorageNotSpecified(
+                    flavor=flavor_id)
+        except nova_exceptions.NotFound:
+            raise exception.FlavorNotFound(uuid=flavor_id)
 
 
 def get_required_volume_size(instances, volume_enabled):

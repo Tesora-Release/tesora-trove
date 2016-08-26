@@ -15,23 +15,50 @@
 
 from proboscis import test
 
+from trove.tests.scenario import groups
 from trove.tests.scenario.groups.test_group import TestGroup
+from trove.tests.scenario.runners import test_runners
 
 
 GROUP = "scenario.cluster_actions_group"
 
 
-@test(groups=[GROUP])
+class ClusterActionsRunnerFactory(test_runners.RunnerFactory):
+
+    _runner_ns = 'cluster_actions_runners'
+    _runner_cls = 'ClusterActionsRunner'
+
+
+@test(groups=[GROUP],
+      runs_after_groups=[groups.MODULE_INST_DELETE,
+                         groups.CFGGRP_INST_DELETE,
+                         groups.INST_ACTIONS_RESIZE_WAIT,
+                         groups.DB_ACTION_INST_DELETE,
+                         groups.USER_ACTION_DELETE,
+                         groups.USER_ACTION_INST_DELETE,
+                         groups.ROOT_ACTION_INST_DELETE,
+                         groups.REPL_INST_DELETE_WAIT,
+                         groups.INST_DELETE_WAIT])
 class ClusterActionsGroup(TestGroup):
 
     def __init__(self):
         super(ClusterActionsGroup, self).__init__(
-            'cluster_actions_runners', 'ClusterActionsRunner')
+            ClusterActionsRunnerFactory.instance())
 
     @test
     def cluster_create(self):
         """Create a cluster."""
         self.test_runner.run_cluster_create()
+
+    @test(depends_on=[cluster_create])
+    def cluster_list(self):
+        """List the clusters."""
+        self.test_runner.run_cluster_list()
+
+    @test(depends_on=[cluster_create])
+    def cluster_show(self):
+        """Show a cluster."""
+        self.test_runner.run_cluster_show()
 
     @test(depends_on=[cluster_create])
     def add_initial_cluster_data(self):
@@ -43,11 +70,27 @@ class ClusterActionsGroup(TestGroup):
         """Verify the initial data exists on cluster."""
         self.test_runner.run_verify_initial_cluster_data()
 
+    @test(depends_on=[cluster_create])
+    def cluster_root_enable(self):
+        """Root Enable."""
+        self.test_runner.run_cluster_root_enable()
+
+    @test(depends_on=[cluster_root_enable])
+    def verify_cluster_root_enable(self):
+        """Verify Root Enable."""
+        self.test_runner.run_verify_cluster_root_enable()
+
     @test(depends_on=[cluster_create],
-          runs_after=[verify_initial_cluster_data])
+          runs_after=[verify_initial_cluster_data, verify_cluster_root_enable,
+                      cluster_list, cluster_show])
     def cluster_grow(self):
         """Grow cluster."""
         self.test_runner.run_cluster_grow()
+
+    @test(depends_on=[cluster_grow])
+    def verify_cluster_root_enable_after_grow(self):
+        """Verify Root Enabled after grow."""
+        self.test_runner.run_verify_cluster_root_enable()
 
     @test(depends_on=[cluster_grow, add_initial_cluster_data])
     def verify_initial_cluster_data_after_grow(self):
@@ -72,10 +115,16 @@ class ClusterActionsGroup(TestGroup):
         self.test_runner.run_remove_extra_cluster_data()
 
     @test(depends_on=[cluster_create],
-          runs_after=[remove_extra_cluster_data_after_grow])
+          runs_after=[remove_extra_cluster_data_after_grow,
+                      verify_cluster_root_enable_after_grow])
     def cluster_shrink(self):
         """Shrink cluster."""
         self.test_runner.run_cluster_shrink()
+
+    @test(depends_on=[cluster_shrink])
+    def verify_cluster_root_enable_after_shrink(self):
+        """Verify Root Enable after shrink."""
+        self.test_runner.run_verify_cluster_root_enable()
 
     @test(depends_on=[cluster_shrink, add_initial_cluster_data])
     def verify_initial_cluster_data_after_shrink(self):
@@ -106,7 +155,8 @@ class ClusterActionsGroup(TestGroup):
         self.test_runner.run_remove_initial_cluster_data()
 
     @test(depends_on=[cluster_create],
-          runs_after=[remove_initial_cluster_data])
+          runs_after=[remove_initial_cluster_data,
+                      verify_cluster_root_enable_after_shrink])
     def cluster_delete(self):
         """Delete an existing cluster."""
         self.test_runner.run_cluster_delete()

@@ -21,8 +21,9 @@ from mock import patch
 from testtools import TestCase
 from testtools.matchers import Is, Equals
 from trove.cluster import models
-from trove.cluster.models import Cluster
+from trove.cluster.models import Cluster, DBCluster
 from trove.cluster.service import ClusterController
+from trove.cluster.tasks import ClusterTasks
 from trove.cluster import views
 import trove.common.cfg as cfg
 from trove.common import exception
@@ -36,6 +37,7 @@ class TestClusterController(TestCase):
     def setUp(self):
         super(TestClusterController, self).setUp()
         self.controller = ClusterController()
+        self.locality = 'anti-affinity'
         instances = [
             {
                 "flavorRef": "7",
@@ -56,7 +58,8 @@ class TestClusterController(TestCase):
                     "type": "mongodb",
                     "version": "2.4.10"
                 },
-                "instances": instances
+                "instances": instances,
+                "locality": self.locality,
             }
         }
         self.add_shard = {
@@ -111,6 +114,20 @@ class TestClusterController(TestCase):
         self.assertIn("'' does not match '^.*[0-9a-zA-Z]+.*$'", error_messages)
         self.assertIn("type", error_paths)
 
+    def test_validate_create_bad_locality(self):
+        body = self.cluster
+        body['cluster']['locality'] = "$%^&"
+        schema = self.controller.get_schema('create', body)
+        validator = jsonschema.Draft4Validator(schema)
+        self.assertFalse(validator.is_valid(body))
+        errors = sorted(validator.iter_errors(body), key=lambda e: e.path)
+        error_messages = [error.message for error in errors]
+        error_paths = [error.path.pop() for error in errors]
+        self.assertThat(len(errors), Is(1))
+        self.assertIn("'$%^&' does not match '^.*[0-9a-zA-Z]+.*$'",
+                      error_messages)
+        self.assertIn("locality", error_paths)
+
     @patch.object(Cluster, 'create')
     @patch.object(datastore_models, 'get_datastore_version')
     def test_create_clusters_disabled(self,
@@ -159,6 +176,8 @@ class TestClusterController(TestCase):
                 'volume_type': None,
                 'flavor_id': '1234',
                 'availability_zone': 'az',
+                'modules': None,
+                'region_name': None,
                 'nics': [
                     {'net-id': 'e89aa5fd-6b0a-436d-a75c-1545d34d5331'}
                 ]
@@ -175,7 +194,7 @@ class TestClusterController(TestCase):
         self.controller.create(req, body, tenant_id)
         mock_cluster_create.assert_called_with(context, 'products',
                                                datastore, datastore_version,
-                                               instances, {})
+                                               instances, {}, self.locality)
 
     @patch.object(Cluster, 'load')
     def test_show_cluster(self,
@@ -192,6 +211,7 @@ class TestClusterController(TestCase):
         mock_cluster.instances_without_server = []
         mock_cluster.datastore_version.manager = 'mongodb'
         mock_cluster_load.return_value = mock_cluster
+        mock_cluster.locality = self.locality
 
         self.controller.show(req, tenant_id, id)
         mock_cluster_load.assert_called_with(context, id)
@@ -284,7 +304,8 @@ class TestClusterControllerWithStrategy(TestCase):
                                       mock_cluster_create,
                                       mock_get_datastore_version):
 
-        cfg.CONF.set_override('cluster_support', False, group='mongodb')
+        cfg.CONF.set_override('cluster_support', False, group='mongodb',
+                              enforce_type=True)
 
         body = self.cluster
         tenant_id = Mock()
@@ -309,7 +330,8 @@ class TestClusterControllerWithStrategy(TestCase):
                                      mock_get_datastore_version,
                                      mock_cluster_view_data):
 
-        cfg.CONF.set_override('cluster_support', True, group='mongodb')
+        cfg.CONF.set_override('cluster_support', True, group='mongodb',
+                              enforce_type=True)
 
         body = self.cluster
         tenant_id = Mock()
@@ -329,24 +351,51 @@ class TestClusterControllerWithStrategy(TestCase):
         self.controller.create(req, body, tenant_id)
 
     @patch.object(models.Cluster, 'load')
-    def test_controller_action_no_strategy(self,
-                                           mock_cluster_load):
+    def test_controller_action_multi_action(self,
+                                            mock_cluster_load):
 
-        body = {'do_stuff2': {}}
+        body = {'do_stuff': {}, 'do_stuff2': {}}
         tenant_id = Mock()
         context = trove_testtools.TroveTestContext(self)
-        id = Mock()
+        cluster_id = Mock()
 
         req = Mock()
         req.environ = MagicMock()
         req.environ.get = Mock(return_value=context)
 
         cluster = Mock()
-        cluster.datastore_version.manager = 'mongodb'
+        cluster.instances_without_server = [Mock()]
+        cluster.datastore_version.manager = 'test_dsv'
         mock_cluster_load.return_value = cluster
 
-        self.assertRaises(exception.TroveError, self.controller.action, req,
-                          body, tenant_id, id)
+        self.assertRaisesRegexp(exception.TroveError,
+                                'should have exactly one action specified',
+                                self.controller.action, req,
+                                body, tenant_id, cluster_id)
+
+    @patch.object(models.Cluster, 'load')
+    def test_controller_action_no_strategy(self,
+                                           mock_cluster_load):
+
+        body = {'do_stuff2': {}}
+        tenant_id = Mock()
+        context = trove_testtools.TroveTestContext(self)
+        cluster_id = Mock()
+
+        req = Mock()
+        req.environ = MagicMock()
+        req.environ.get = Mock(return_value=context)
+
+        db_info = DBCluster(ClusterTasks.NONE, id=cluster_id,
+                            tenant_id=tenant_id)
+        cluster = Cluster(context, db_info, datastore='test_ds',
+                          datastore_version='test_dsv')
+        mock_cluster_load.return_value = cluster
+
+        self.assertRaisesRegexp(exception.TroveError,
+                                'Action do_stuff2 not supported',
+                                self.controller.action, req,
+                                body, tenant_id, cluster_id)
 
     @patch.object(strategy, 'load_api_strategy')
     @patch.object(models.Cluster, 'load')
@@ -354,24 +403,19 @@ class TestClusterControllerWithStrategy(TestCase):
                                      mock_cluster_load,
                                      mock_cluster_api_strategy):
 
-        body = {'do_stuff': {}}
+        body = {'grow': {}}
         tenant_id = Mock()
         context = trove_testtools.TroveTestContext(self)
-        id = Mock()
+        cluster_id = 'test_uuid'
 
         req = Mock()
         req.environ = MagicMock()
         req.environ.get = Mock(return_value=context)
 
         cluster = Mock()
-        cluster.datastore_version.manager = 'mongodb'
+        cluster.instances_without_server = [Mock()]
+        cluster.datastore_version.manager = 'test_dsv'
         mock_cluster_load.return_value = cluster
 
-        strat = Mock()
-        do_stuff_func = Mock()
-        strat.cluster_controller_actions = \
-            {'do_stuff': do_stuff_func}
-        mock_cluster_api_strategy.return_value = strat
-
-        self.controller.action(req, body, tenant_id, id)
-        self.assertEqual(1, do_stuff_func.call_count)
+        self.controller.action(req, body, tenant_id, cluster_id)
+        self.assertEqual(1, cluster.action.call_count)

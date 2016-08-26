@@ -27,8 +27,7 @@ class Replication(Strategy):
     __strategy_type__ = 'replication'
     __strategy_ns__ = 'trove.guestagent.strategies.replication'
 
-    def __init__(self, context):
-        self.context = context
+    def __init__(self):
         super(Replication, self).__init__()
 
     @abc.abstractmethod
@@ -39,13 +38,17 @@ class Replication(Strategy):
         """Indicates whether a backup is required for replication."""
         return True
 
+    def post_processing_required_for_replication(self):
+        """Indicates whether a post processing is required for replication."""
+        return False
+
     @abc.abstractmethod
     def snapshot_for_replication(self, context, service, location,
                                  snapshot_info):
         """Capture snapshot of master db."""
 
     @abc.abstractmethod
-    def enable_as_master(self, service, master_config, for_failover):
+    def enable_as_master(self, service, master_config):
         """Configure underlying database to act as master for replication."""
 
     @abc.abstractmethod
@@ -63,3 +66,18 @@ class Replication(Strategy):
     @abc.abstractmethod
     def demote_master(self, service):
         """Turn off replication on a master site."""
+
+    @property
+    def repl_backup_runner(self):
+        """Backup runner to be used to snapshot for replication"""
+        return None
+
+    @property
+    def repl_incr_backup_runner(self):
+        """Incremental backup runner to be used to snapshot for replication"""
+        return None
+
+    @property
+    def repl_backup_extra_opts(self):
+        """Extra options to be passed to the backup agent"""
+        return None

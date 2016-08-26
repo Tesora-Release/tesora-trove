@@ -14,20 +14,20 @@
 
 from mock import MagicMock
 from mock import patch
-import testtools
 from testtools.matchers import Is, Equals, Not
 
 from trove.common.instance import ServiceStatuses
-from trove.guestagent.datastore.experimental.db2 import (
+from trove.guestagent import backup
+from trove.guestagent.datastore.db2 import (
     manager as db2_manager)
-from trove.guestagent.datastore.experimental.db2 import (
+from trove.guestagent.datastore.db2 import (
     service as db2_service)
 from trove.guestagent import pkg as pkg
 from trove.guestagent import volume
 from trove.tests.unittests import trove_testtools
 
 
-class GuestAgentDB2ManagerTest(testtools.TestCase):
+class GuestAgentDB2ManagerTest(trove_testtools.TestCase):
 
     def setUp(self):
         super(GuestAgentDB2ManagerTest, self).setUp()
@@ -56,6 +56,8 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
         self.orig_create_users = db2_service.DB2Admin.create_user
         self.orig_list_users = db2_service.DB2Admin.list_users
         self.orig_delete_user = db2_service.DB2Admin.delete_user
+        self.orig_update_hostname = db2_service.DB2App.update_hostname
+        self.orig_backup_restore = backup.restore
 
     def tearDown(self):
         super(GuestAgentDB2ManagerTest, self).tearDown()
@@ -74,6 +76,8 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
         db2_service.DB2Admin.create_user = self.orig_create_users
         db2_service.DB2Admin.list_users = self.orig_list_users
         db2_service.DB2Admin.delete_user = self.orig_delete_user
+        db2_service.DB2App.update_hostname = self.orig_update_hostname
+        backup.restore = self.orig_backup_restore
 
     def test_update_status(self):
         mock_status = MagicMock()
@@ -90,16 +94,24 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
     def test_prepare_database(self):
         self._prepare_dynamic(databases=['db1'])
 
+    def test_prepare_from_backup(self):
+        self._prepare_dynamic(['db2'], backup_id='123backup')
+
     def _prepare_dynamic(self, packages=None, databases=None, users=None,
                          config_content=None, device_path='/dev/vdb',
                          is_db_installed=True, backup_id=None, overrides=None):
+
+        backup_info = {'id': backup_id,
+                       'location': 'fake-location',
+                       'type': 'DB2Backup',
+                       'checksum': 'fake-checksum'} if backup_id else None
+
         mock_status = MagicMock()
         mock_app = MagicMock()
         self.manager.appStatus = mock_status
         self.manager.app = mock_app
 
         mock_status.begin_install = MagicMock(return_value=None)
-        pkg.Package.pkg_is_installed = MagicMock(return_value=is_db_installed)
         mock_app.change_ownership = MagicMock(return_value=None)
         mock_app.restart = MagicMock(return_value=None)
         mock_app.start_db = MagicMock(return_value=None)
@@ -109,16 +121,21 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
         volume.VolumeDevice.mount_points = MagicMock(return_value=[])
         db2_service.DB2Admin.create_user = MagicMock(return_value=None)
         db2_service.DB2Admin.create_database = MagicMock(return_value=None)
+        backup.restore = MagicMock(return_value=None)
 
-        self.manager.prepare(context=self.context, packages=packages,
-                             config_contents=config_content,
-                             databases=databases,
-                             memory_mb='2048', users=users,
-                             device_path=device_path,
-                             mount_point="/home/db2inst1/db2inst1",
-                             backup_info=None,
-                             overrides=None,
-                             cluster_config=None)
+        with patch.object(pkg.Package, 'pkg_is_installed',
+                          return_value=MagicMock(
+                              return_value=is_db_installed)):
+            self.manager.prepare(context=self.context, packages=packages,
+                                 config_contents=config_content,
+                                 databases=databases,
+                                 memory_mb='2048', users=users,
+                                 device_path=device_path,
+                                 mount_point="/home/db2inst1/db2inst1",
+                                 backup_info=backup_info,
+                                 overrides=None,
+                                 cluster_config=None)
+
         mock_status.begin_install.assert_any_call()
         self.assertEqual(1, mock_app.change_ownership.call_count)
         if databases:
@@ -130,6 +147,11 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
             self.assertTrue(db2_service.DB2Admin.create_user.called)
         else:
             self.assertFalse(db2_service.DB2Admin.create_user.called)
+
+        if backup_id:
+            backup.restore.assert_any_call(self.context,
+                                           backup_info,
+                                           '/home/db2inst1/db2inst1')
 
     def test_restart(self):
         mock_status = MagicMock()
@@ -195,15 +217,16 @@ class GuestAgentDB2ManagerTest(testtools.TestCase):
         self.assertThat(users, Equals(['user1']))
         db2_service.DB2Admin.list_users.assert_any_call(None, None, False)
 
-    def test_get_users(self):
+    @patch.object(db2_service.DB2Admin, 'get_user',
+                  return_value=MagicMock(return_value=['user1']))
+    def test_get_users(self, get_user_mock):
         username = ['user1']
         hostname = ['host']
         mock_status = MagicMock()
         self.manager.appStatus = mock_status
-        db2_service.DB2Admin.get_user = MagicMock(return_value=['user1'])
         users = self.manager.get_user(self.context, username, hostname)
-        self.assertThat(users, Equals(['user1']))
-        db2_service.DB2Admin.get_user.assert_any_call(username, hostname)
+        self.assertThat(users, Equals(get_user_mock.return_value))
+        get_user_mock.assert_any_call(username, hostname)
 
     def test_reset_configuration(self):
         try:

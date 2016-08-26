@@ -18,11 +18,11 @@ from trove.tests.scenario.helpers.test_helper import TestHelper
 
 class MongodbHelper(TestHelper):
 
-    def __init__(self, expected_override_name):
-        super(MongodbHelper, self).__init__(expected_override_name)
+    def __init__(self, expected_override_name, report):
+        super(MongodbHelper, self).__init__(expected_override_name, report)
 
     def get_valid_database_definitions(self):
-        return [{"name": 'db1'}, {"name": 'db2'}]
+        return [{"name": 'db1'}, {"name": 'db2'}, {'name': 'db3'}]
 
     def get_valid_user_definitions(self):
         return [{'name': 'db0.user1', 'password': 'password1',

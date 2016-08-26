@@ -22,6 +22,7 @@ from trove.common.instance import ServiceStatuses
 from trove.datastore import models as datastore_models
 from trove.instance import models
 from trove.instance.models import DBInstance
+from trove.instance.models import DBInstanceFault
 from trove.instance.models import filter_ips
 from trove.instance.models import Instance
 from trove.instance.models import InstanceServiceStatus
@@ -39,12 +40,14 @@ class SimpleInstanceTest(trove_testtools.TestCase):
 
     def setUp(self):
         super(SimpleInstanceTest, self).setUp()
+        self.context = trove_testtools.TroveTestContext(self, is_admin=True)
         db_info = DBInstance(
             InstanceTasks.BUILDING, name="TestInstance")
         self.instance = SimpleInstance(
             None, db_info, InstanceServiceStatus(
                 ServiceStatuses.BUILDING), ds_version=Mock(), ds=Mock(),
             locality='affinity')
+        self.instance.context = self.context
         db_info.addresses = {"private": [{"addr": "123.123.123.123"}],
                              "internal": [{"addr": "10.123.123.123"}],
                              "public": [{"addr": "15.123.123.123"}]}
@@ -69,7 +72,7 @@ class SimpleInstanceTest(trove_testtools.TestCase):
         ip = self.instance.get_visible_ip_addresses()
         ip = filter_ips(
             ip, CONF.ip_regex, CONF.black_list_regex)
-        self.assertTrue(len(ip) == 2)
+        self.assertEqual(2, len(ip))
         self.assertTrue('123.123.123.123' in ip)
         self.assertTrue('15.123.123.123' in ip)
 
@@ -80,7 +83,7 @@ class SimpleInstanceTest(trove_testtools.TestCase):
         ip = self.instance.get_visible_ip_addresses()
         ip = filter_ips(
             ip, CONF.ip_regex, CONF.black_list_regex)
-        self.assertTrue(len(ip) == 2)
+        self.assertEqual(2, len(ip))
         self.assertTrue('10.123.123.123' not in ip)
 
     def test_one_network_label(self):
@@ -91,20 +94,35 @@ class SimpleInstanceTest(trove_testtools.TestCase):
     def test_two_network_labels(self):
         CONF.network_label_regex = '^(private|public)$'
         ip = self.instance.get_visible_ip_addresses()
-        self.assertTrue(len(ip) == 2)
+        self.assertEqual(2, len(ip))
         self.assertTrue('123.123.123.123' in ip)
         self.assertTrue('15.123.123.123' in ip)
 
     def test_all_network_labels(self):
         CONF.network_label_regex = '.*'
         ip = self.instance.get_visible_ip_addresses()
-        self.assertTrue(len(ip) == 3)
+        self.assertEqual(3, len(ip))
         self.assertTrue('10.123.123.123' in ip)
         self.assertTrue('123.123.123.123' in ip)
         self.assertTrue('15.123.123.123' in ip)
 
     def test_locality(self):
         self.assertEqual('affinity', self.instance.locality)
+
+    def test_fault(self):
+        fault_message = 'Error'
+        fault_details = 'details'
+        fault_date = 'now'
+        temp_fault = Mock()
+        temp_fault.message = fault_message
+        temp_fault.details = fault_details
+        temp_fault.updated = fault_date
+        fault_mock = Mock(return_value=temp_fault)
+        with patch.object(DBInstanceFault, 'find_by', fault_mock):
+            fault = self.instance.fault
+            self.assertEqual(fault_message, fault.message)
+            self.assertEqual(fault_details, fault.details)
+            self.assertEqual(fault_date, fault.updated)
 
 
 class CreateInstanceTest(trove_testtools.TestCase):
@@ -219,7 +237,8 @@ class CreateInstanceTest(trove_testtools.TestCase):
         self.assertIsNotNone(instance)
 
     def test_can_instantiate_with_locality(self):
-        self.backup.size = 0.99
+        # make sure the backup will fit
+        self.backup.size = 0.2
         self.backup.save()
         instance = models.Instance.create(
             self.context, self.name, self.flavor_id,
@@ -347,21 +366,23 @@ class TestReplication(trove_testtools.TestCase):
         models.create_nova_client = self.safe_nova_client
         super(TestReplication, self).tearDown()
 
-    def test_replica_of_not_active_master(self):
+    @patch('trove.instance.models.LOG')
+    def test_replica_of_not_active_master(self, mock_logging):
         self.master.set_task_status(InstanceTasks.BUILDING)
         self.master.save()
         self.master_status.set_status(ServiceStatuses.BUILDING)
         self.master_status.save()
         self.assertRaises(exception.UnprocessableEntity,
                           Instance.create,
-                          None, 'name', 1, "UUID", [], [], None,
+                          None, 'name', 1, "UUID", [], [], self.datastore,
                           self.datastore_version, 1,
                           None, slave_of_id=self.master.id)
 
-    def test_replica_with_invalid_slave_of_id(self):
+    @patch('trove.instance.models.LOG')
+    def test_replica_with_invalid_slave_of_id(self, mock_logging):
         self.assertRaises(exception.NotFound,
                           Instance.create,
-                          None, 'name', 1, "UUID", [], [], None,
+                          None, 'name', 1, "UUID", [], [], self.datastore,
                           self.datastore_version, 1,
                           None, slave_of_id=str(uuid.uuid4()))
 
@@ -378,6 +399,6 @@ class TestReplication(trove_testtools.TestCase):
             slave_of_id=self.master.id)
         self.replica_info.save()
         self.assertRaises(exception.Forbidden, Instance.create,
-                          None, 'name', 2, "UUID", [], [], None,
+                          None, 'name', 2, "UUID", [], [], self.datastore,
                           self.datastore_version, 1,
                           None, slave_of_id=self.replica_info.id)

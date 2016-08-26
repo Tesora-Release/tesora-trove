@@ -23,7 +23,6 @@ from trove.cluster.service import ClusterController
 from trove.cluster import views
 import trove.common.cfg as cfg
 from trove.common import exception
-from trove.common.strategies.cluster import strategy
 from trove.common import utils
 from trove.datastore import models as datastore_models
 from trove.tests.unittests import trove_testtools
@@ -125,11 +124,12 @@ class TestClusterController(trove_testtools.TestCase):
         datastore_version.manager = 'mysql'
         mock_get_datastore_version.return_value = (Mock(), datastore_version)
 
-        self.assertRaises(exception.ClusterDatastoreNotSupported,
-                          self.controller.create,
-                          req,
-                          body,
-                          tenant_id)
+        self.assertRaisesRegexp(exception.ClusterDatastoreNotSupported,
+                                "Clusters not supported for",
+                                self.controller.create,
+                                req,
+                                body,
+                                tenant_id)
 
     @patch.object(Cluster, 'create')
     @patch.object(utils, 'get_id_from_href')
@@ -156,6 +156,8 @@ class TestClusterController(trove_testtools.TestCase):
                 'volume_type': None,
                 "flavor_id": "1234",
                 "availability_zone": "az",
+                'modules': None,
+                'region_name': None,
                 "nics": [
                     {"net-id": "e89aa5fd-6b0a-436d-a75c-1545d34d5331"}
                 ]
@@ -165,6 +167,8 @@ class TestClusterController(trove_testtools.TestCase):
                 'volume_type': None,
                 "flavor_id": "1234",
                 "availability_zone": "az",
+                'modules': None,
+                'region_name': None,
                 "nics": [
                     {"net-id": "e89aa5fd-6b0a-436d-a75c-1545d34d5331"}
                 ]
@@ -174,6 +178,8 @@ class TestClusterController(trove_testtools.TestCase):
                 'volume_type': None,
                 "flavor_id": "1234",
                 "availability_zone": "az",
+                'modules': None,
+                'region_name': None,
                 "nics": [
                     {"net-id": "e89aa5fd-6b0a-436d-a75c-1545d34d5331"}
                 ]
@@ -190,7 +196,7 @@ class TestClusterController(trove_testtools.TestCase):
         self.controller.create(req, body, tenant_id)
         mock_cluster_create.assert_called_with(context, 'products',
                                                datastore, datastore_version,
-                                               instances, {})
+                                               instances, {}, None)
 
     @patch.object(Cluster, 'load')
     def test_show_cluster(self,
@@ -287,7 +293,8 @@ class TestClusterControllerWithStrategy(trove_testtools.TestCase):
                                       mock_cluster_create,
                                       mock_get_datastore_version):
 
-        cfg.CONF.set_override('cluster_support', False, group='redis')
+        cfg.CONF.set_override('cluster_support', False, group='redis',
+                              enforce_type=True)
 
         body = self.cluster
         tenant_id = Mock()
@@ -301,8 +308,12 @@ class TestClusterControllerWithStrategy(trove_testtools.TestCase):
         datastore_version.manager = 'redis'
         mock_get_datastore_version.return_value = (Mock(), datastore_version)
 
-        self.assertRaises(exception.TroveError, self.controller.create, req,
-                          body, tenant_id)
+        self.assertRaisesRegexp(exception.TroveError,
+                                "Clusters not supported for",
+                                self.controller.create,
+                                req,
+                                body,
+                                tenant_id)
 
     @patch.object(views.ClusterView, 'data', return_value={})
     @patch.object(datastore_models, 'get_datastore_version')
@@ -312,7 +323,8 @@ class TestClusterControllerWithStrategy(trove_testtools.TestCase):
                                      mock_get_datastore_version,
                                      mock_cluster_view_data):
 
-        cfg.CONF.set_override('cluster_support', True, group='redis')
+        cfg.CONF.set_override('cluster_support', True, group='redis',
+                              enforce_type=True)
 
         body = self.cluster
         tenant_id = Mock()
@@ -330,51 +342,3 @@ class TestClusterControllerWithStrategy(trove_testtools.TestCase):
         mock_cluster.datastore_version.manager = 'redis'
         mock_cluster_create.return_value = mock_cluster
         self.controller.create(req, body, tenant_id)
-
-    @patch.object(models.Cluster, 'load')
-    def test_controller_action_no_strategy(self,
-                                           mock_cluster_load):
-
-        body = {'do_stuff2': {}}
-        tenant_id = Mock()
-        context = trove_testtools.TroveTestContext(self)
-        id = Mock()
-
-        req = Mock()
-        req.environ = MagicMock()
-        req.environ.get = Mock(return_value=context)
-
-        cluster = Mock()
-        cluster.datastore_version.manager = 'redis'
-        mock_cluster_load.return_value = cluster
-
-        self.assertRaises(exception.TroveError, self.controller.action, req,
-                          body, tenant_id, id)
-
-    @patch.object(strategy, 'load_api_strategy')
-    @patch.object(models.Cluster, 'load')
-    def test_controller_action_found(self,
-                                     mock_cluster_load,
-                                     mock_cluster_api_strategy):
-
-        body = {'do_stuff': {}}
-        tenant_id = Mock()
-        context = trove_testtools.TroveTestContext(self)
-        id = Mock()
-
-        req = Mock()
-        req.environ = MagicMock()
-        req.environ.get = Mock(return_value=context)
-
-        cluster = Mock()
-        cluster.datastore_version.manager = 'redis'
-        mock_cluster_load.return_value = cluster
-
-        strat = Mock()
-        do_stuff_func = Mock()
-        strat.cluster_controller_actions = \
-            {'do_stuff': do_stuff_func}
-        mock_cluster_api_strategy.return_value = strat
-
-        self.controller.action(req, body, tenant_id, id)
-        self.assertEqual(1, do_stuff_func.call_count)

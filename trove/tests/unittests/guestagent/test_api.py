@@ -92,12 +92,14 @@ class ApiTest(trove_testtools.TestCase):
         self._verify_rpc_prepare_before_cast()
         self._verify_cast('create_user', users='test_user')
 
-    def test_api_cast_exception(self):
+    @mock.patch('trove.guestagent.api.LOG')
+    def test_api_cast_exception(self, mock_logging):
         self.call_context.cast.side_effect = IOError('host down')
         self.assertRaises(exception.GuestError, self.api.create_user,
                           'test_user')
 
-    def test_api_call_exception(self):
+    @mock.patch('trove.guestagent.api.LOG')
+    def test_api_call_exception(self, mock_logging):
         self.call_context.call.side_effect = IOError('host_down')
         self.assertRaises(exception.GuestError, self.api.list_users)
 
@@ -105,12 +107,14 @@ class ApiTest(trove_testtools.TestCase):
         self.call_context.call.side_effect = Timeout()
         self.assertRaises(exception.GuestTimeout, self.api.restart)
 
-    def test_api_cast_remote_error(self):
+    @mock.patch('trove.guestagent.api.LOG')
+    def test_api_cast_remote_error(self, mock_logging):
         self.call_context.cast.side_effect = RemoteError('Error')
         self.assertRaises(exception.GuestError, self.api.delete_database,
                           'test_db')
 
-    def test_api_call_remote_error(self):
+    @mock.patch('trove.guestagent.api.LOG')
+    def test_api_call_remote_error(self, mock_logging):
         self.call_context.call.side_effect = RemoteError('Error')
         self.assertRaises(exception.GuestError, self.api.stop_db)
 
@@ -352,8 +356,7 @@ class ApiTest(trove_testtools.TestCase):
         self.api.enable_as_master({})
         # verify
         self._verify_rpc_prepare_before_call()
-        self._verify_call('enable_as_master_s2', for_failover=False,
-                          replica_source_config={})
+        self._verify_call('enable_as_master', replica_source_config={})
 
     def test_get_txn_count(self):
         # execute
@@ -413,7 +416,7 @@ class ApiTest(trove_testtools.TestCase):
             mount_point='/mnt/opt', backup_info=None,
             config_contents='cont', root_password='1-2-3-4',
             overrides='override', cluster_config={'id': '2-3-4-5'},
-            snapshot=None)
+            snapshot=None, modules=None)
 
     @mock.patch.object(messaging, 'Target')
     @mock.patch.object(rpc, 'get_server')
@@ -421,7 +424,7 @@ class ApiTest(trove_testtools.TestCase):
         backup = {'id': 'backup_id_123'}
         self.api.prepare('2048', 'package1', 'db1', 'user1', '/dev/vdt',
                          '/mnt/opt', backup, 'cont', '1-2-3-4',
-                         'overrides', {"id": "2-3-4-5"})
+                         'overrides', {"id": "2-3-4-5"}, modules=None)
 
         self._verify_rpc_prepare_before_cast()
         self._verify_cast(
@@ -430,7 +433,24 @@ class ApiTest(trove_testtools.TestCase):
             mount_point='/mnt/opt', backup_info=backup,
             config_contents='cont', root_password='1-2-3-4',
             overrides='overrides', cluster_config={'id': '2-3-4-5'},
-            snapshot=None)
+            snapshot=None, modules=None)
+
+    @mock.patch.object(messaging, 'Target')
+    @mock.patch.object(rpc, 'get_server')
+    def test_prepare_with_modules(self, *args):
+        modules = [{'id': 'mod_id'}]
+        self.api.prepare('2048', 'package1', 'db1', 'user1', '/dev/vdt',
+                         '/mnt/opt', None, 'cont', '1-2-3-4',
+                         'overrides', {"id": "2-3-4-5"}, modules=modules)
+
+        self._verify_rpc_prepare_before_cast()
+        self._verify_cast(
+            'prepare', packages=['package1'], databases='db1',
+            memory_mb='2048', users='user1', device_path='/dev/vdt',
+            mount_point='/mnt/opt', backup_info=None,
+            config_contents='cont', root_password='1-2-3-4',
+            overrides='overrides', cluster_config={'id': '2-3-4-5'},
+            snapshot=None, modules=modules)
 
     def test_upgrade(self):
         instance_version = "v1.0.1"

@@ -20,7 +20,7 @@ from mock import patch
 from trove.common import context
 from trove.common import exception
 from trove.common.rpc.version import RPC_API_VERSION
-from trove.common.strategies.cluster.experimental.mongodb.taskmanager import (
+from trove.common.strategies.cluster.mongodb.taskmanager import (
     MongoDbTaskManagerAPI)
 from trove.guestagent import models as agent_models
 from trove.taskmanager import api as task_api
@@ -47,6 +47,25 @@ class ApiTest(trove_testtools.TestCase):
         self.call_context = trove_testtools.TroveTestContext(self)
         self.api.client.prepare = Mock(return_value=self.call_context)
         self.call_context.cast = Mock()
+
+    @patch.object(task_api.API, '_transform_obj', Mock(return_value='flv-id'))
+    def test_create_instance(self):
+        flavor = Mock()
+        self.api.create_instance(
+            'inst-id', 'inst-name', flavor, 'img-id', {'name': 'db1'},
+            {'name': 'usr1'}, 'mysql', None, 1, backup_id='bk-id',
+            availability_zone='az', root_password='pwd', nics=['nic-id'],
+            overrides={}, slave_of_id='slv-id', cluster_config={},
+            volume_type='type', modules=['mod-id'], locality='affinity')
+        self._verify_rpc_prepare_before_cast()
+        self._verify_cast(
+            'create_instance', availability_zone='az', backup_id='bk-id',
+            cluster_config={}, databases={'name': 'db1'},
+            datastore_manager='mysql', flavor='flv-id', image_id='img-id',
+            instance_id='inst-id', locality='affinity', modules=['mod-id'],
+            name='inst-name', nics=['nic-id'], overrides={}, packages=None,
+            root_password='pwd', slave_of_id='slv-id', users={'name': 'usr1'},
+            volume_size=1, volume_type='type')
 
     def test_detach_replica(self):
         self.api.detach_replica('some-instance-id')
@@ -89,7 +108,9 @@ class ApiTest(trove_testtools.TestCase):
         mock_heartbeat.delete.assert_called_with()
 
     @patch.object(agent_models, 'AgentHeartBeat')
-    def test_exception_delete_heartbeat(self, mock_agent_heart_beat):
+    @patch('trove.taskmanager.api.LOG')
+    def test_exception_delete_heartbeat(self, mock_logging,
+                                        mock_agent_heart_beat):
         mock_agent_heart_beat.return_value.find_by_instance_id.side_effect = (
             exception.ModelNotFoundError)
         self.api._delete_heartbeat('some-cluster-id')
@@ -117,6 +138,6 @@ class TestAPI(trove_testtools.TestCase):
         context = trove_testtools.TroveTestContext(self)
         manager = 'mongodb'
 
-        self.assertTrue(isinstance(task_api.load(context), task_api.API))
-        self.assertTrue(isinstance(task_api.load(context, manager),
-                                   MongoDbTaskManagerAPI))
+        self.assertIsInstance(task_api.load(context), task_api.API)
+        self.assertIsInstance(task_api.load(context, manager),
+                              MongoDbTaskManagerAPI)

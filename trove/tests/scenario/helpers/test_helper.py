@@ -29,16 +29,22 @@ class DataType(Enum):
     _fn_data dictionary defined in TestHelper.
     """
 
+    # micro amount of data, useful for testing datastore logging, etc.
+    micro = 1
+    # another micro dataset (also for datastore logging)
+    micro2 = 2
     # very tiny amount of data, useful for testing replication
     # propagation, etc.
-    tiny = 1
+    tiny = 3
     # another tiny dataset (also for replication propagation)
-    tiny2 = 2
+    tiny2 = 4
+    # a third tiny dataset (also for replication propagation)
+    tiny3 = 5
     # small amount of data (this can be added to each instance
     # after creation, for example).
-    small = 3
+    small = 6
     # large data, enough to make creating a backup take 20s or more.
-    large = 4
+    large = 7
 
 
 class TestHelper(object):
@@ -63,7 +69,7 @@ class TestHelper(object):
     # actual data manipulation work.
     DT_ACTUAL = 'actual'
 
-    def __init__(self, expected_override_name):
+    def __init__(self, expected_override_name, report):
         """Initialize the helper class by creating a number of stub
         functions that each datastore specific class can chose to
         override.  Basically, the functions are of the form:
@@ -82,6 +88,7 @@ class TestHelper(object):
         super(TestHelper, self).__init__()
 
         self._expected_override_name = expected_override_name
+        self.report = report
 
         # For building data access functions
         # name/fn pairs for each action
@@ -98,14 +105,23 @@ class TestHelper(object):
         self.DATA_START = 'start'
         self.DATA_SIZE = 'size'
         self._fn_data = {
+            DataType.micro.name: {
+                self.DATA_START: 100,
+                self.DATA_SIZE: 10},
+            DataType.micro2.name: {
+                self.DATA_START: 200,
+                self.DATA_SIZE: 10},
             DataType.tiny.name: {
-                self.DATA_START: 1,
+                self.DATA_START: 1000,
                 self.DATA_SIZE: 100},
             DataType.tiny2.name: {
-                self.DATA_START: 500,
+                self.DATA_START: 2000,
+                self.DATA_SIZE: 100},
+            DataType.tiny3.name: {
+                self.DATA_START: 3000,
                 self.DATA_SIZE: 100},
             DataType.small.name: {
-                self.DATA_START: 1000,
+                self.DATA_START: 10000,
                 self.DATA_SIZE: 1000},
             DataType.large.name: {
                 self.DATA_START: 100000,
@@ -113,6 +129,18 @@ class TestHelper(object):
         }
 
         self._build_data_fns()
+
+    #################
+    # Utility methods
+    #################
+    def get_class_name(self):
+        """Builds a string of the expected class name, plus the actual one
+        being used if it's not the same.
+        """
+        class_name_str = "'%s'" % self._expected_override_name
+        if self._expected_override_name != self.__class__.__name__:
+            class_name_str += ' (using %s)' % self.__class__.__name__
+        return class_name_str
 
     ################
     # Client related
@@ -125,7 +153,9 @@ class TestHelper(object):
         return self.create_client(host, *args, **kwargs)
 
     def create_client(self, host, *args, **kwargs):
-        """Create a datastore client."""
+        """Create a datastore client.  This is datastore specific, so this
+        method should be overridden if datastore access is desired.
+        """
         raise SkipTest('No client defined')
 
     def get_helper_credentials(self):
@@ -134,18 +164,47 @@ class TestHelper(object):
         """
         return {'name': None, 'password': None, 'database': None}
 
+    def ping(self, host, *args, **kwargs):
+        """Try to connect to a given host and perform a simple read-only
+        action.
+
+        Return True on success or False otherwise.
+        """
+        pass
+
+    ##############
+    # Root related
+    ##############
+    def get_helper_credentials_root(self):
+        """Return the credentials that the client will be using to
+        access the database as root.
+        """
+        return {'name': None, 'password': None}
+
     ##############
     # Data related
     ##############
     def add_data(self, data_type, host, *args, **kwargs):
         """Adds data of type 'data_type' to the database.  Descendant
-        classes should implement a function for each DataType value
-        of the form 'add_{DataType.name}_data' - for example:
-            'add_tiny_data'
-            'add_small_data'
-            ...
-        Since this method may be called multiple times, the implemented
-        'add_*_data' functions should be idempotent.
+        classes should implement a function 'add_actual_data' that has the
+        following signature:
+            def add_actual_data(
+                self,        # standard self reference
+                data_label,  # label used to identify the 'type' to add
+                data_start,  # a start count
+                data_size,   # a size to use
+                host,        # the host to add the data to
+                *args,       # for possible future expansion
+                **kwargs     # for possible future expansion
+            ):
+        The data_label could be used to create a database or a table if the
+        datastore supports that.  The data_start and data_size values are
+        designed not to overlap, such that all the data could be stored
+        in a single namespace (for example, creating ids from data_start
+        to data_start + data_size).
+
+        Since this method may be called multiple times, the
+        'add_actual_data' function should be idempotent.
         """
         self._perform_data_action(self.FN_ADD, data_type.name, host,
                                   *args, **kwargs)
@@ -162,9 +221,27 @@ class TestHelper(object):
         datastore.  This can be done by testing edge cases, and possibly
         some random elements within the set.  See
         instructions for 'add_data' for implementation guidance.
+        By default, the verification is attempted 10 times, sleeping for 3
+        seconds between each attempt.  This can be controlled by the
+        retry_count and retry_sleep kwarg values.
         """
-        self._perform_data_action(self.FN_VERIFY, data_type.name, host,
-                                  *args, **kwargs)
+        retry_count = kwargs.pop('retry_count', 10) or 0
+        retry_sleep = kwargs.pop('retry_sleep', 3) or 0
+        attempts = -1
+        while True:
+            attempts += 1
+            try:
+                self._perform_data_action(self.FN_VERIFY, data_type.name, host,
+                                          *args, **kwargs)
+                break
+            except Exception as ex:
+                self.report.log("Attempt %d to verify data type %s failed\n%s"
+                                % (attempts, data_type.name, ex))
+                if attempts > retry_count:
+                    raise
+                self.report.log("Trying again (after %d second sleep)" %
+                                retry_sleep)
+                sleep(retry_sleep)
 
     def _perform_data_action(self, fn_type, fn_name, host, *args, **kwargs):
         fns = self._data_fns[fn_type]
@@ -244,15 +321,6 @@ class TestHelper(object):
                 if name in fns:
                     fns[name] = fn
 
-    #####################
-    # Replication related
-    #####################
-    def wait_for_replicas(self):
-        """Wait for data to propagate to all the replicas.  Datastore
-        specific overrides could increase (or decrease) this delay.
-        """
-        sleep(30)
-
     #######################
     # Database/User related
     #######################
@@ -326,13 +394,86 @@ class TestHelper(object):
 
     def get_invalid_groups(self):
         """Return a list of configuration groups with invalid values.
+        An empty list indicates that no 'invalid' tests should be run.
         """
         return []
 
-    ##############
-    # Root related
-    ##############
-    def get_valid_root_password(self):
-        """Return a valid password that can be used by a 'root' user.
+    def get_configuration_value(self, property_name, host, *args, **kwargs):
+        """Use the client to retrieve the value of a given configuration
+        property.
         """
-        return "RootTestPass"
+        raise SkipTest("Runtime configuration retrieval not implemented in %s"
+                       % self.get_class_name())
+
+    ###################
+    # Guest Log related
+    ###################
+    def get_exposed_log_list(self):
+        """Return the list of exposed logs for the datastore.  This
+        method shouldn't need to be overridden.
+        """
+        logs = []
+        try:
+            logs.extend(self.get_exposed_user_log_names())
+        except SkipTest:
+            pass
+        try:
+            logs.extend(self.get_exposed_sys_log_names())
+        except SkipTest:
+            pass
+
+        return logs
+
+    def get_full_log_list(self):
+        """Return the full list of all logs for the datastore.  This
+        method shouldn't need to be overridden.
+        """
+        logs = self.get_exposed_log_list()
+        try:
+            logs.extend(self.get_unexposed_user_log_names())
+        except SkipTest:
+            pass
+        try:
+            logs.extend(self.get_unexposed_sys_log_names())
+        except SkipTest:
+            pass
+
+        return logs
+
+    # Override these guest log methods if needed
+    def get_exposed_user_log_names(self):
+        """Return the names of the user logs that are visible to all users.
+        The first log name will be used for tests.
+        """
+        raise SkipTest("No exposed user log names defined.")
+
+    def get_unexposed_user_log_names(self):
+        """Return the names of the user logs that not visible to all users.
+        The first log name will be used for tests.
+        """
+        raise SkipTest("No unexposed user log names defined.")
+
+    def get_exposed_sys_log_names(self):
+        """Return the names of SYS logs that are visible to all users.
+        The first log name will be used for tests.
+        """
+        raise SkipTest("No exposed sys log names defined.")
+
+    def get_unexposed_sys_log_names(self):
+        """Return the names of the sys logs that not visible to all users.
+        The first log name will be used for tests.
+        """
+        return ['guest']
+
+    def log_enable_requires_restart(self):
+        """Returns whether enabling or disabling a USER log requires a
+        restart of the datastore.
+        """
+        return False
+
+    ##############
+    # Module related
+    ##############
+    def get_valid_module_type(self):
+        """Return a valid module type."""
+        return "Ping"

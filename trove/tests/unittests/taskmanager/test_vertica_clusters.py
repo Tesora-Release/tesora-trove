@@ -20,11 +20,11 @@ from trove.cluster.models import ClusterTasks as ClusterTaskStatus
 from trove.cluster.models import DBCluster
 import trove.common.context as context
 from trove.common.exception import GuestError
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaClusterTasks as ClusterTasks)
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaTaskManagerAPI as task_api)
-from trove.common.strategies.cluster.experimental.vertica.taskmanager import (
+from trove.common.strategies.cluster.vertica.taskmanager import (
     VerticaTaskManagerStrategy as task_strategy)
 from trove.datastore import models as datastore_models
 from trove.instance.models import BaseInstance
@@ -59,7 +59,7 @@ class VerticaClusterTasksTest(trove_testtools.TestCase):
                                   volume_id="volume-1",
                                   datastore_version_id="1",
                                   cluster_id=self.cluster_id,
-                                  type="member")
+                                  type="master")
         self.dbinst2 = DBInstance(InstanceTasks.NONE, id="2", name="member2",
                                   compute_instance_id="compute-2",
                                   task_id=InstanceTasks.NONE._code,
@@ -87,7 +87,8 @@ class VerticaClusterTasksTest(trove_testtools.TestCase):
 
     @patch.object(ClusterTasks, 'update_statuses_on_failure')
     @patch.object(InstanceServiceStatus, 'find_by')
-    def test_all_instances_ready_bad_status(self,
+    @patch('trove.taskmanager.models.LOG')
+    def test_all_instances_ready_bad_status(self, mock_logging,
                                             mock_find, mock_update):
         (mock_find.return_value.
          get_status.return_value) = ServiceStatuses.FAILED
@@ -131,15 +132,19 @@ class VerticaClusterTasksTest(trove_testtools.TestCase):
     @patch.object(datastore_models.DatastoreVersion, 'load_by_uuid')
     def test_create_cluster(self, mock_dv, mock_ds, mock_find_all, mock_load,
                             mock_ready, mock_ip, mock_guest, mock_reset_task):
-        mock_find_all.return_value.all.return_value = [self.dbinst1]
+        cluster_instances = [self.dbinst1, self.dbinst2, self.dbinst3]
+        for instance in cluster_instances:
+            if instance['type'] == "master":
+                mock_find_all.return_value.all.return_value = [self.dbinst1]
+            mock_ready.return_value = True
         mock_load.return_value = BaseInstance(Mock(),
                                               self.dbinst1, Mock(),
                                               InstanceServiceStatus(
                                                   ServiceStatuses.NEW))
         mock_ip.return_value = "10.0.0.2"
         self.clustertasks.create_cluster(Mock(), self.cluster_id)
-        mock_guest.return_value.install_cluster.assert_called_with(['10.0.0.2']
-                                                                   )
+        mock_guest.return_value.install_cluster.assert_called_with(
+            ['10.0.0.2'])
         mock_reset_task.assert_called_with()
         mock_guest.return_value.cluster_complete.assert_called_with()
 
@@ -151,7 +156,10 @@ class VerticaClusterTasksTest(trove_testtools.TestCase):
     @patch.object(DBInstance, 'find_all')
     @patch.object(datastore_models.Datastore, 'load')
     @patch.object(datastore_models.DatastoreVersion, 'load_by_uuid')
-    def test_create_cluster_fail(self, mock_dv, mock_ds, mock_find_all,
+    @patch(
+        'trove.common.strategies.cluster.vertica.taskmanager.LOG')
+    def test_create_cluster_fail(self, mock_logging, mock_dv, mock_ds,
+                                 mock_find_all,
                                  mock_load, mock_ready, mock_ip,
                                  mock_reset_task, mock_update_status):
         mock_find_all.return_value.all.return_value = [self.dbinst1]

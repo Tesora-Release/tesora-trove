@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import itertools
 import os
 import re
 import stat
@@ -21,12 +20,13 @@ import tempfile
 
 from mock import call, patch
 from oslo_concurrency.processutils import UnknownArgumentError
+import six
 from testtools import ExpectedException
 
 from trove.common import exception
 from trove.common.stream_codecs import (
-    Base64Codec, IdentityCodec, IniCodec, JsonCodec, PropertiesCodec,
-    YamlCodec)
+    Base64Codec, IdentityCodec, IniCodec, JsonCodec,
+    KeyValueCodec, PropertiesCodec, XmlCodec, YamlCodec)
 from trove.common import utils
 from trove.guestagent.common import guestagent_utils
 from trove.guestagent.common import operating_system
@@ -35,6 +35,16 @@ from trove.tests.unittests import trove_testtools
 
 
 class TestOperatingSystem(trove_testtools.TestCase):
+
+    def test_base64_codec(self):
+        data = "Line 1\nLine 2\n"
+        self._test_file_codec(data, Base64Codec())
+
+        data = "TGluZSAxCkxpbmUgMgo="
+        self._test_file_codec(data, Base64Codec(), reverse_encoding=True)
+
+        data = "5Am9+y0wTwqUx39sMMBg3611FWg="
+        self._test_file_codec(data, Base64Codec(), reverse_encoding=True)
 
     def test_identity_file_codec(self):
         data = ("Lorem Ipsum, Lorem Ipsum\n"
@@ -106,6 +116,13 @@ class TestOperatingSystem(trove_testtools.TestCase):
         self._test_file_codec(data, PropertiesCodec(
             string_mappings={'yes': True, 'no': False, "''": None}))
 
+    def test_key_value_file_codec(self):
+        data = {'key1': 'value1',
+                'key2': 'value2',
+                'key3': 'value3'}
+
+        self._test_file_codec(data, KeyValueCodec())
+
     def test_json_file_codec(self):
         data = {"Section1": 's1v1',
                 "Section2": {"s2k1": '1',
@@ -116,28 +133,45 @@ class TestOperatingSystem(trove_testtools.TestCase):
 
         self._test_file_codec(data, JsonCodec())
 
-    def test_base64_codec(self):
-        data = "LoremIpsumLoremIpsum"
+    def test_xml_file_codec(self):
+        data = {'document': {'@name': 'mydocument', '@ttl': '10',
+                             'author': {'@name': 'Jycll ;-)'},
+                             'page': [{'@number': '1', 'paragraph':
+                                       ['lorem ipsum', 'more lorem ipsum']},
+                                      {'@number': '1', 'paragraph':
+                                       ['lorem ipsum', 'more lorem ipsum']}]
+                             }
+                }
 
-        self._test_file_codec(data, Base64Codec())
+        self._test_file_codec(data, XmlCodec())
 
     def _test_file_codec(self, data, read_codec, write_codec=None,
                          expected_data=None,
-                         expected_exception=None):
+                         expected_exception=None,
+                         reverse_encoding=False):
         write_codec = write_codec or read_codec
 
         with tempfile.NamedTemporaryFile() as test_file:
+            encode = True
+            decode = True
+            if reverse_encoding:
+                encode = False
+                decode = False
             if expected_exception:
                 with expected_exception:
                     operating_system.write_file(test_file.name, data,
-                                                codec=write_codec)
+                                                codec=write_codec,
+                                                encode=encode)
                     operating_system.read_file(test_file.name,
-                                               codec=read_codec)
+                                               codec=read_codec,
+                                               decode=decode)
             else:
                 operating_system.write_file(test_file.name, data,
-                                            codec=write_codec)
+                                            codec=write_codec,
+                                            encode=encode)
                 read = operating_system.read_file(test_file.name,
-                                                  codec=read_codec)
+                                                  codec=read_codec,
+                                                  decode=decode)
                 if expected_data is not None:
                     self.assertEqual(expected_data, read)
                 else:
@@ -652,6 +686,74 @@ class TestOperatingSystem(trove_testtools.TestCase):
                               "Got unknown keyword args: {'_unknown_kw': 0}"),
             'path', 'usr', None, _unknown_kw=0)
 
+    def test_change_user_group(self):
+        self._assert_execute_call(
+            [['usermod', '-a', '-G', 'user', 'group']],
+            [{'run_as_root': True, 'root_helper': 'sudo'}],
+            operating_system.change_user_group, None, 'group', 'user',
+            as_root=True)
+
+        self._assert_execute_call(
+            [['usermod', '-a', '-G', 'user', 'group']],
+            [{'run_as_root': True, 'root_helper': 'sudo'}],
+            operating_system.change_user_group, None, 'group', 'user',
+            append=True, add_group=True, as_root=True)
+
+        self._assert_execute_call(
+            [['usermod', '-a', '-G', 'user', 'group']],
+            [{'timeout': 100}],
+            operating_system.change_user_group, None, 'group', 'user',
+            timeout=100)
+
+        self._assert_execute_call(
+            [['usermod', '-a', '-G', 'user', 'group']],
+            [{'run_as_root': True, 'root_helper': "sudo", 'timeout': None}],
+            operating_system.change_user_group, None, 'group', 'user',
+            timeout=None, as_root=True)
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing user."), '', 'group')
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing user."), None, 'group')
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing group."), 'user', '')
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing group."), 'user', None)
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing user."), '', '')
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(exception.UnprocessableEntity,
+                              "Missing user."), None, None)
+
+        self._assert_execute_call(
+            None, None,
+            operating_system.change_user_group,
+            ExpectedException(UnknownArgumentError,
+                              "Got unknown keyword args: {'_unknown_kw': 0}"),
+            'user', 'add_group', _unknown_kw=0)
+
     def test_create_directory(self):
         self._assert_execute_call(
             [['mkdir', '-p', 'path']],
@@ -764,7 +866,7 @@ class TestOperatingSystem(trove_testtools.TestCase):
             as_root=True)
 
     def _assert_execute_call(self, exec_args, exec_kwargs,
-                             fun, return_value, *args, **kwargs):
+                             func, return_value, *args, **kwargs):
         """
         Execute a function with given arguments.
         Assert a return value and appropriate sequence of calls to the
@@ -782,8 +884,8 @@ class TestOperatingSystem(trove_testtools.TestCase):
                                   'utils.execute_with_timeout'.
         :type exec_kwargs:        list-of-dicts
 
-        :param fun:               Tested function call.
-        :type fun:                callable
+        :param func:              Tested function call.
+        :type func:               callable
 
         :param return_value:      Expected return value or exception
                                   from the tested call if any.
@@ -800,14 +902,14 @@ class TestOperatingSystem(trove_testtools.TestCase):
                           return_value=('0', '')) as exec_call:
             if isinstance(return_value, ExpectedException):
                 with return_value:
-                    fun(*args, **kwargs)
+                    func(*args, **kwargs)
             else:
-                actual_value = fun(*args, **kwargs)
+                actual_value = func(*args, **kwargs)
                 if return_value is not None:
                     self.assertEqual(return_value, actual_value,
                                      "Return value mismatch.")
                 expected_calls = []
-                for arg, kw in itertools.izip(exec_args, exec_kwargs):
+                for arg, kw in six.moves.zip(exec_args, exec_kwargs):
                     expected_calls.append(call(*arg, **kw))
 
                 self.assertEqual(expected_calls, exec_call.mock_calls,
@@ -870,6 +972,10 @@ class TestOperatingSystem(trove_testtools.TestCase):
             config_file = operating_system.file_discovery(
                 ["/etc/mongodb.conf", "/etc/mongod.conf"])
         self.assertEqual('/etc/mongod.conf', config_file)
+        with patch.object(os.path, 'isfile', side_effect=[False]):
+            config_file = operating_system.file_discovery(
+                ["/etc/mongodb.conf"])
+        self.assertEqual('', config_file)
 
     def test_list_files_in_directory(self):
         root_path = tempfile.mkdtemp()
