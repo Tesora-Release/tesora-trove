@@ -49,11 +49,6 @@ class TroveContext(context.RequestContext):
 
     def to_dict(self):
         parent_dict = super(TroveContext, self).to_dict()
-        # DAS - Remove the roles attribute that was introduced in
-        # a later version of oslo.context. This is to facilitate
-        # a 1.7.x guest working with 1.8 controller (Paypal migration)
-        parent_dict.pop('roles', None)
-
         parent_dict.update({'limit': self.limit,
                             'marker': self.marker,
                             'service_catalog': self.service_catalog

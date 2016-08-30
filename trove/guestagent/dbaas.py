@@ -36,6 +36,8 @@ LOG = logging.getLogger(__name__)
 defaults = {
     'mysql':
     'trove.guestagent.datastore.mysql.manager.Manager',
+    'mysql_ee':
+    'trove.guestagent.datastore.mysql_ee.manager.Manager',
     'percona':
     'trove.guestagent.datastore.percona.manager.Manager',
     'pxc':
@@ -68,6 +70,8 @@ defaults = {
     'trove.guestagent.datastore.oracle.manager.Manager',
     'oracle_ra':
     'trove.guestagent.datastore.oracle_ra.manager.Manager',
+    'oracle_rac':
+    'trove.guestagent.datastore.oracle_rac.manager.Manager',
     'mariadb':
     'trove.guestagent.datastore.mariadb.manager.Manager',
     'edb':

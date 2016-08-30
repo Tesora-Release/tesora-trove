@@ -62,9 +62,10 @@ VOLUME_ID = 'volume-id-1'
 
 class FakeOptGroup(object):
     def __init__(self, tcp_ports=['3306', '3301-3307'],
-                 udp_ports=[]):
+                 udp_ports=[], icmp=False):
         self.tcp_ports = tcp_ports
         self.udp_ports = udp_ports
+        self.icmp = icmp
 
 
 class fake_Server:
@@ -372,6 +373,15 @@ class FreshInstanceTasksTest(trove_testtools.TestCase):
                           self.freshinstancetasks._create_secgroup,
                           datastore_manager)
 
+    def test_create_sg_rules_icmp(self):
+        datastore_manager = 'mysql'
+        self.task_models_conf_mock.get = Mock(
+            return_value=FakeOptGroup(icmp=True))
+        self.freshinstancetasks.update_db = Mock()
+        self.freshinstancetasks._create_secgroup(datastore_manager)
+        self.assertEqual(3, taskmanager_models.SecurityGroupRule.
+                         create_sec_group_rule.call_count)
+
     @patch.object(BaseInstance, 'update_db')
     @patch('trove.taskmanager.models.CONF')
     @patch('trove.taskmanager.models.LOG')
@@ -385,7 +395,8 @@ class FreshInstanceTasksTest(trove_testtools.TestCase):
             'Error creating security group for instance',
             self.freshinstancetasks.create_instance, mock_flavor,
             'mysql-image-id', None, None, 'mysql', 'mysql-server', 2,
-            None, None, None, None, Mock(), None, None, None, None, None)
+            None, None, None, None, Mock(), None, None, None, None,
+            None)
 
     @patch.object(BaseInstance, 'update_db')
     @patch.object(backup_models.Backup, 'get_by_id')

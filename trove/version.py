@@ -13,6 +13,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import pbr.version
+class VersionInfo(object):
+    def __init__(self, package):
+        self.package = package
+        self.version = None
 
-version_info = pbr.version.VersionInfo('trove')
+    def __str__(self):
+        return self.version_string()
+
+    def cached_version_string(self):
+        return self.version_string()
+
+    def version_string(self):
+        return "1.9.0"
+
+version_info = VersionInfo('trove')

@@ -21,6 +21,7 @@ from eventlet import greenthread
 from heatclient import exc as heat_exceptions
 from novaclient import exceptions as nova_exceptions
 from oslo_log import log as logging
+from oslo_utils import importutils
 from oslo_utils import timeutils
 from swiftclient.client import ClientException
 
@@ -309,6 +310,51 @@ class ClusterTasks(Cluster):
             LOG.error(_("timeout for instances to be marked as deleted."))
             return
 
+        network_driver = (importutils.import_class(
+            CONF.network_driver))(context, None)
+        if network_driver.subnet_support:
+            LOG.debug("searching for any network resources owned by the "
+                      "cluster")
+            try:
+                def _find(items):
+                    matches = []
+                    for item in items:
+                        name = item.get('name')
+                        if name and name.endswith(cluster_id):
+                            matches.append(item)
+                    return matches
+
+                ports = _find(network_driver.list_ports())
+                subnets = _find(network_driver.list_subnets())
+                networks = _find(network_driver.list_networks())
+
+                # Detach subnets from routers
+                if subnets:
+                    for port in ports:
+                        if (port.get('device_owner') ==
+                                'network:router_interface'):
+                            subnet = port['fixed_ips'][0]['subnet_id']
+                            router = port['device_id']
+                            LOG.debug("detaching subnet {subnet} from router "
+                                      "{router}".format(subnet=subnet,
+                                                        router=router))
+                            network_driver.disconnect_subnet_from_router(
+                                router, subnet)
+
+                for port in ports:
+                    # Don't try and delete the interface - we did that earlier
+                    if port.get('device_owner') != 'network:router_interface':
+                        LOG.debug("deleting port " + port['id'])
+                        network_driver.delete_port(port['id'])
+                for subnet in subnets:
+                    LOG.debug("deleting subnet " + subnet['id'])
+                    network_driver.delete_subnet(subnet['id'])
+                for network in networks:
+                    LOG.debug("deleting network " + network['id'])
+                    network_driver.delete_network(network['id'])
+            except TroveError:
+                LOG.exception("Failed to clean up all cluster network "
+                              "resources. Skipping network cleanup.")
         LOG.debug("setting cluster %s as deleted." % cluster_id)
         cluster = DBCluster.find_by(id=cluster_id)
         cluster.deleted = True
@@ -319,6 +365,24 @@ class ClusterTasks(Cluster):
 
 
 class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
+
+    def _delete_resources(self, deleted_at):
+        LOG.debug("Begin _delete_resources for instance %s" % self.id)
+
+        # If volume has "available" status, delete it manually.
+        try:
+            if self.volume_id:
+                volume_client = create_cinder_client(self.context)
+                volume = volume_client.volumes.get(self.volume_id)
+                if volume.status == "available":
+                    LOG.info(_("Deleting volume %(v)s for instance: %(i)s.")
+                             % {'v': self.volume_id, 'i': self.id})
+                    volume.delete()
+        except Exception:
+            LOG.exception(_("Error deleting volume of instance %(id)s.") %
+                          {'id': self.db_info.id})
+
+        LOG.debug("End _delete_resource for instance %s" % self.id)
 
     def wait_for_instance(self, timeout, flavor):
         # Make sure the service becomes active before sending a usage
@@ -995,8 +1059,11 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
             self.id, self.context, self.region_name)
         tcp_ports = CONF.get(datastore_manager).tcp_ports
         udp_ports = CONF.get(datastore_manager).udp_ports
+        icmp = CONF.get(datastore_manager).icmp
         self._create_rules(security_group, tcp_ports, 'tcp')
         self._create_rules(security_group, udp_ports, 'udp')
+        if icmp:
+            self._create_rules(security_group, None, 'icmp')
         return [security_group["name"]]
 
     def _create_rules(self, s_group, ports, protocol):
@@ -1012,16 +1079,22 @@ class FreshInstanceTasks(FreshInstance, NotifyMixin, ConfigurationMixin):
                              'to': to_port}
             raise MalformedSecurityGroupRuleError(message=msg)
 
-        for port_or_range in set(ports):
-            try:
-                from_, to_ = (None, None)
-                from_, to_ = utils.gen_ports(port_or_range)
-                cidr = CONF.trove_security_group_rule_cidr
-                SecurityGroupRule.create_sec_group_rule(
-                    s_group, protocol, int(from_), int(to_),
-                    cidr, self.context, self.region_name)
-            except (ValueError, TroveError):
-                set_error_and_raise([from_, to_])
+        cidr = CONF.trove_security_group_rule_cidr
+
+        if protocol == 'icmp':
+            SecurityGroupRule.create_sec_group_rule(
+                s_group, 'icmp', None, None,
+                cidr, self.context, self.region_name)
+        else:
+            for port_or_range in set(ports):
+                try:
+                    from_, to_ = (None, None)
+                    from_, to_ = utils.gen_ports(port_or_range)
+                    SecurityGroupRule.create_sec_group_rule(
+                        s_group, protocol, int(from_), int(to_),
+                        cidr, self.context, self.region_name)
+                except (ValueError, TroveError):
+                    set_error_and_raise([from_, to_])
 
     def _build_heat_nics(self, nics):
         ifaces = []
@@ -1094,7 +1167,8 @@ class BuiltInstanceTasks(BuiltInstance, NotifyMixin, ConfigurationMixin):
             LOG.exception(_("Error during dns entry of instance %(id)s: "
                             "%(ex)s") % {'id': self.db_info.id, 'ex': ex})
         try:
-            srv_grp.ServerGroup.delete(self.context, self.server_group)
+            srv_grp.ServerGroup.delete(
+                self.context, self.server_group, self.id)
         except Exception:
             LOG.exception(_("Error during delete server group for %s")
                           % self.id)

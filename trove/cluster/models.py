@@ -21,7 +21,8 @@ from trove.cluster.tasks import ClusterTasks
 from trove.common import cfg
 from trove.common import exception
 from trove.common.i18n import _
-from trove.common.notification import DBaaSClusterGrow, DBaaSClusterShrink
+from trove.common.notification import DBaaSClusterGrow, DBaaSClusterShrink, \
+    DBaaSClusterResetStatus
 from trove.common.notification import StartNotification
 from trove.common import remote
 from trove.common import server_group as srv_grp
@@ -92,7 +93,6 @@ class Cluster(object):
         self._db_instances = None
         self._server_group = None
         self._server_group_loaded = False
-        self._locality = None
 
     @classmethod
     def get_guest(cls, instance):
@@ -135,6 +135,16 @@ class Cluster(object):
     def reset_task(self):
         LOG.info(_("Setting task to NONE on cluster %s") % self.id)
         self.update_db(task_status=ClusterTasks.NONE)
+
+    def reset_status(self):
+        self.validate_cluster_available([ClusterTasks.BUILDING_INITIAL])
+        LOG.info(_("Resetting status to NONE on cluster %s") % self.id)
+        self.reset_task()
+        instances = inst_models.DBInstance.find_all(cluster_id=self.id,
+                                                    deleted=False).all()
+        for inst in instances:
+            instance = inst_models.load_any_instance(self.context, inst.id)
+            instance.reset_status()
 
     @property
     def id(self):
@@ -205,25 +215,10 @@ class Cluster(object):
     @property
     def server_group(self):
         # The server group could be empty, so we need a flag to cache it
-        if not self._server_group_loaded and self.instances:
+        if not self._server_group_loaded:
             self._server_group = self.instances[0].server_group
-            self._server_group_loaded = True
+        self._server_group_loaded = True
         return self._server_group
-
-    @property
-    def locality(self):
-        if not self._locality and not self._server_group_loaded:
-            if self.server_group:
-                self._locality = srv_grp.ServerGroup.get_locality(
-                    self._server_group)
-        return self._locality
-
-    @locality.setter
-    def locality(self, value):
-        """This is to facilitate the fact that the server group may not be
-        set up before the create command returns.
-        """
-        self._locality = value
 
     @classmethod
     def create(cls, context, name, datastore, datastore_version,
@@ -254,11 +249,6 @@ class Cluster(object):
 
         self.update_db(task_status=ClusterTasks.DELETING)
 
-        # we force the server-group delete here since we need to load the
-        # group while the instances still exist. Also, since the instances
-        # take a while to be removed they might not all be gone even if we
-        # do it after the delete.
-        srv_grp.ServerGroup.delete(self.context, self.server_group, force=True)
         for db_inst in db_insts:
             instance = inst_models.load_any_instance(self.context, db_inst.id)
             instance.delete()
@@ -292,6 +282,12 @@ class Cluster(object):
             with StartNotification(context, cluster_id=self.id):
                 instance_ids = [instance['id'] for instance in param]
                 return self.shrink(instance_ids)
+        elif action == "reset-status":
+            context.notification = DBaaSClusterResetStatus(context,
+                                                           request=req)
+            with StartNotification(context, cluster_id=self.id):
+                return self.reset_status()
+
         else:
             raise exception.BadRequest(_("Action %s not supported") % action)
 

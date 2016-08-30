@@ -42,6 +42,7 @@ from trove.common import utils
 REDHAT = 'redhat'
 DEBIAN = 'debian'
 SUSE = 'suse'
+ORACLE = 'oracle'
 
 # A newline character for writing into text files (default).
 # Do not use 'os.linesep' when writing files in the text mode.
@@ -127,7 +128,7 @@ def _read_file_as_root(path, codec, decode=True):
     :type decode:              boolean
     """
     with tempfile.NamedTemporaryFile() as fp:
-        copy(path, fp.name, force=True, as_root=True)
+        copy(path, fp.name, force=True, dereference=True, as_root=True)
         chmod(fp.name, FileMode.ADD_READ_ALL(), as_root=True)
         if decode:
             return codec.deserialize(fp.read())
@@ -246,12 +247,6 @@ class FileMode(object):
         return cls(reset=[stat.S_IRUSR | stat.S_IWUSR])  # =0600
 
     @classmethod
-    def SET_ALL_RW(cls):
-        return cls(add=[stat.S_IRUSR | stat.S_IWUSR |
-                        stat.S_IRGRP | stat.S_IWGRP |
-                        stat.S_IROTH | stat.S_IWOTH])  # =0666
-
-    @classmethod
     def ADD_ALL_R(cls):
         return cls(add=[stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH])  # +0444
 
@@ -356,6 +351,8 @@ def get_os():
         return REDHAT
     elif os.path.isfile("/etc/SuSE-release"):
         return SUSE
+    elif os.path.isfile("/etc/oracle-release"):
+        return ORACLE
     else:
         return DEBIAN
 
@@ -722,7 +719,7 @@ def move(source, destination, force=False, **kwargs):
 
 
 def copy(source, destination, force=False, preserve=False, recursive=True,
-         **kwargs):
+         dereference=False, **kwargs):
     """Copy a given file or directory to another location.
     Copy does NOT attempt to preserve ownership, permissions and timestamps
     unless the 'preserve' option is enabled.
@@ -745,6 +742,9 @@ def copy(source, destination, force=False, preserve=False, recursive=True,
     :param recursive:       Copy directories recursively.
     :type recursive:        boolean
 
+    :param dereference:     Follow symbolic links when copying from them.
+    :type dereference:      boolean
+
     :raises:                :class:`UnprocessableEntity` if source or
                             destination not given.
     """
@@ -754,7 +754,8 @@ def copy(source, destination, force=False, preserve=False, recursive=True,
     elif not destination:
         raise exception.UnprocessableEntity(_("Missing destination path."))
 
-    options = (('f', force), ('p', preserve), ('R', recursive))
+    options = (('f', force), ('p', preserve), ('R', recursive),
+               ('L', dereference))
     _execute_shell_cmd('cp', options, source, destination, **kwargs)
 
 
@@ -849,13 +850,16 @@ def get_package_command():
 
     pkg_cmd = {REDHAT: "rpm",
                DEBIAN: "dpkg",
-               SUSE: "rpm"}[os_name]
+               SUSE: "rpm",
+               ORACLE: "rpm"}[os_name]
     install_options = {REDHAT: ["-i"],
                        DEBIAN: ["-i"],
-                       SUSE: ["-i"]}[os_name]
+                       SUSE: ["-i"],
+                       ORACLE: ["-i"]}[os_name]
     uninstall_options = {REDHAT: ["-ev"],
                          DEBIAN: ["-r"],
-                         SUSE: ["-ev"]}[os_name]
+                         SUSE: ["-ev"],
+                         ORACLE: ["-ev"]}[os_name]
     return pkg_cmd, install_options, uninstall_options
 
 

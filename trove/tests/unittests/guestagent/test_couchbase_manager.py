@@ -219,17 +219,6 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                           'bucket2': {'saslPassword': 'password2',
                                       'ramQuota': '134217728'}}, bucket_list)
 
-    def test_ramsize_quota_mb(self):
-        app = couch_service.CouchbaseApp(Mock())
-
-        with patch.object(couch_service.CouchbaseApp, 'available_ram_mb',
-                          new_callable=PropertyMock) as available_ram_mock:
-            available_ram_mock.return_value = 1024
-            self.assertEqual('819', str(app.ramsize_quota_mb))
-
-            available_ram_mock.return_value = 128
-            self.assertEqual('256', str(app.ramsize_quota_mb))
-
     def test_enable_root(self):
         app = couch_service.CouchbaseApp(Mock())
 
@@ -247,3 +236,14 @@ class GuestAgentCouchbaseManagerTest(trove_testtools.TestCase):
                 self.assertRaises(ProcessExecutionError, app.enable_root)
                 app.status.begin_restart.assert_called_once_with()
                 app.status.end_restart.assert_called_once_with()
+
+    def test_ramsize_quota_mb(self):
+        app = couch_service.CouchbaseApp(Mock())
+
+        with patch.object(couch_service.CouchbaseApp, 'available_ram_mb',
+                          new_callable=PropertyMock) as available_ram_mock:
+            available_ram_mock.return_value = 1024
+            self.assertEqual('819', str(app.ramsize_quota_mb))
+
+            available_ram_mock.return_value = 128
+            self.assertEqual('256', str(app.ramsize_quota_mb))

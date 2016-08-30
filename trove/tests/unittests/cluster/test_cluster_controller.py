@@ -18,7 +18,6 @@ import jsonschema
 from mock import MagicMock
 from mock import Mock
 from mock import patch
-from testtools import TestCase
 from testtools.matchers import Is, Equals
 from trove.cluster import models
 from trove.cluster.models import Cluster, DBCluster
@@ -33,11 +32,11 @@ from trove.datastore import models as datastore_models
 from trove.tests.unittests import trove_testtools
 
 
-class TestClusterController(TestCase):
+class TestClusterController(trove_testtools.TestCase):
+
     def setUp(self):
         super(TestClusterController, self).setUp()
         self.controller = ClusterController()
-        self.locality = 'anti-affinity'
         instances = [
             {
                 "flavorRef": "7",
@@ -58,8 +57,7 @@ class TestClusterController(TestCase):
                     "type": "mongodb",
                     "version": "2.4.10"
                 },
-                "instances": instances,
-                "locality": self.locality,
+                "instances": instances
             }
         }
         self.add_shard = {
@@ -113,20 +111,6 @@ class TestClusterController(TestCase):
         self.assertIn("'' is too short", error_messages)
         self.assertIn("'' does not match '^.*[0-9a-zA-Z]+.*$'", error_messages)
         self.assertIn("type", error_paths)
-
-    def test_validate_create_bad_locality(self):
-        body = self.cluster
-        body['cluster']['locality'] = "$%^&"
-        schema = self.controller.get_schema('create', body)
-        validator = jsonschema.Draft4Validator(schema)
-        self.assertFalse(validator.is_valid(body))
-        errors = sorted(validator.iter_errors(body), key=lambda e: e.path)
-        error_messages = [error.message for error in errors]
-        error_paths = [error.path.pop() for error in errors]
-        self.assertThat(len(errors), Is(1))
-        self.assertIn("'$%^&' does not match '^.*[0-9a-zA-Z]+.*$'",
-                      error_messages)
-        self.assertIn("locality", error_paths)
 
     @patch.object(Cluster, 'create')
     @patch.object(datastore_models, 'get_datastore_version')
@@ -194,7 +178,7 @@ class TestClusterController(TestCase):
         self.controller.create(req, body, tenant_id)
         mock_cluster_create.assert_called_with(context, 'products',
                                                datastore, datastore_version,
-                                               instances, {}, self.locality)
+                                               instances, {}, None)
 
     @patch.object(Cluster, 'load')
     def test_show_cluster(self,
@@ -211,7 +195,6 @@ class TestClusterController(TestCase):
         mock_cluster.instances_without_server = []
         mock_cluster.datastore_version.manager = 'mongodb'
         mock_cluster_load.return_value = mock_cluster
-        mock_cluster.locality = self.locality
 
         self.controller.show(req, tenant_id, id)
         mock_cluster_load.assert_called_with(context, id)
@@ -247,7 +230,8 @@ class TestClusterController(TestCase):
         cluster.delete.assert_called_with()
 
 
-class TestClusterControllerWithStrategy(TestCase):
+class TestClusterControllerWithStrategy(trove_testtools.TestCase):
+
     def setUp(self):
         super(TestClusterControllerWithStrategy, self).setUp()
         self.controller = ClusterController()

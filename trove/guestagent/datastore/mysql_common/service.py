@@ -69,7 +69,8 @@ INCLUDE_MARKER_OPERATORS = {
 OS_NAME = operating_system.get_os()
 MYSQL_CONFIG = {operating_system.REDHAT: "/etc/my.cnf",
                 operating_system.DEBIAN: "/etc/mysql/my.cnf",
-                operating_system.SUSE: "/etc/my.cnf"}[OS_NAME]
+                operating_system.SUSE: "/etc/my.cnf",
+                operating_system.ORACLE: "/etc/my.cnf"}[OS_NAME]
 MYSQL_BIN_CANDIDATES = ["/usr/sbin/mysqld", "/usr/libexec/mysqld"]
 MYSQL_OWNER = 'mysql'
 CNF_EXT = 'cnf'
@@ -912,9 +913,10 @@ class BaseMySqlApp(object):
             }
             return binlog_position
 
-    def execute_on_client(self, sql_statement):
+    def execute_on_client(self, sql_statement, use_flush=True):
         LOG.debug("Executing SQL: %s" % sql_statement)
-        with self.local_sql_client(self.get_engine()) as client:
+        with self.local_sql_client(self.get_engine(),
+                                   use_flush=use_flush) as client:
             return client.execute(sql_statement)
 
     def start_slave(self):
@@ -947,8 +949,26 @@ class BaseMySqlApp(object):
 
         def verify_slave_status():
             actual_status = client.execute(
-                "SHOW GLOBAL STATUS like 'slave_running'").first()[1]
-            return actual_status.upper() == status.upper()
+                "SHOW GLOBAL STATUS like 'slave_running'").first()
+            if actual_status:
+                return actual_status[1].upper() == status.upper()
+            # The slave_running status is no longer available in MySql 5.7
+            # Need to query the performance_schema instead.
+            LOG.debug("slave_running global status doesn't exist, checking "
+                      "service_state in performance_schema instead.")
+            q = sql_query.Query()
+            q.columns = ["a.service_state", "c.service_state"]
+            q.tables = ["performance_schema.replication_applier_status a",
+                        "performance_schema.replication_connection_status c"]
+            q.where = ["a.channel_name = ''", "c.channel_name = ''"]
+            t = text(str(q))
+            actual_status = client.execute(t).first()
+            if (actual_status and actual_status[0].upper() == 'ON' and
+                    actual_status[1].upper() == 'ON'):
+                actual_status_str = 'ON'
+            else:
+                actual_status_str = 'OFF'
+            return actual_status_str == status.upper()
 
         LOG.debug("Waiting for SLAVE_RUNNING to change to %s.", status)
         try:

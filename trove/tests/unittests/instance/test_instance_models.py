@@ -237,8 +237,7 @@ class CreateInstanceTest(trove_testtools.TestCase):
         self.assertIsNotNone(instance)
 
     def test_can_instantiate_with_locality(self):
-        # make sure the backup will fit
-        self.backup.size = 0.2
+        self.backup.size = 0.99
         self.backup.save()
         instance = models.Instance.create(
             self.context, self.name, self.flavor_id,
