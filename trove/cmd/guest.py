@@ -24,6 +24,7 @@ from oslo_service import service as openstack_service
 
 from trove.common import cfg
 from trove.common import debug_utils
+from trove.common.i18n import _LE
 
 CONF = cfg.CONF
 # The guest_id opt definition must match the one in common/cfg.py
@@ -42,8 +43,13 @@ def main():
     from trove.guestagent import dbaas
     manager = dbaas.datastore_registry().get(CONF.datastore_manager)
     if not manager:
-        msg = ("Manager class not registered for datastore manager %s" %
+        msg = (_LE("Manager class not registered for datastore manager %s") %
                CONF.datastore_manager)
+        raise RuntimeError(msg)
+
+    if not CONF.guest_id:
+        msg = (_LE("The guest_id parameter is not set. guest_info.conf "
+               "was not injected into the guest or not read by guestagent"))
         raise RuntimeError(msg)
 
     # rpc module must be loaded after decision about thread monkeypatching
