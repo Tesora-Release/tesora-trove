@@ -99,6 +99,7 @@ function configure_trove {
 
     iniset $TROVE_CONF DEFAULT rabbit_userid $RABBIT_USERID
     iniset $TROVE_CONF DEFAULT rabbit_password $RABBIT_PASSWORD
+    iniset $TROVE_CONF DEFAULT control_exchange trove
     iniset $TROVE_CONF database connection `database_connection_url trove`
     iniset $TROVE_CONF DEFAULT default_datastore $TROVE_DATASTORE_TYPE
     setup_trove_logging $TROVE_CONF
@@ -117,6 +118,7 @@ function configure_trove {
 
         iniset $TROVE_TASKMANAGER_CONF DEFAULT rabbit_userid $RABBIT_USERID
         iniset $TROVE_TASKMANAGER_CONF DEFAULT rabbit_password $RABBIT_PASSWORD
+        iniset $TROVE_TASKMANAGER_CONF DEFAULT control_exchange trove
         iniset $TROVE_TASKMANAGER_CONF database connection `database_connection_url trove`
         iniset $TROVE_TASKMANAGER_CONF DEFAULT taskmanager_manager trove.taskmanager.manager.Manager
         iniset $TROVE_TASKMANAGER_CONF DEFAULT nova_proxy_admin_user radmin
@@ -132,7 +134,7 @@ function configure_trove {
 
         # Increase default timeouts (required by the tests).
         iniset $TROVE_TASKMANAGER_CONF DEFAULT agent_call_low_timeout 15
-        iniset $TROVE_TASKMANAGER_CONF DEFAULT agent_call_high_timeout 300
+        iniset $TROVE_TASKMANAGER_CONF DEFAULT agent_call_high_timeout 600
         iniset $TROVE_TASKMANAGER_CONF DEFAULT usage_timeout 1800
     fi
 

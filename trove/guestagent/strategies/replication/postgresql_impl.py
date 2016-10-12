@@ -145,7 +145,8 @@ class PostgresqlReplicationStreaming(base.Replication):
 
         repl_user = models.PostgreSQLUser(name=REPL_USER, password=pw)
         admin._create_user(context=None, user=repl_user)
-        admin.alter_user(None, repl_user, True, 'REPLICATION', 'LOGIN')
+        admin.alter_user(None, repl_user, True,
+                         'REPLICATION', 'SUPERUSER', 'LOGIN')
 
         return pw
 
@@ -185,23 +186,31 @@ class PostgresqlReplicationStreaming(base.Replication):
         # Ensure the WAL arch is empty before restoring
         service.recreate_wal_archive_dir()
 
-    def detach_slave(self, service, for_failover):
+    def detach_slave(self, service, for_failover, for_promote):
         """Touch trigger file in to disable recovery mode"""
-        LOG.debug("Detaching slave, use trigger file to disable recovery mode")
-        operating_system.write_file(TRIGGER_FILE, '')
-        operating_system.chown(TRIGGER_FILE, user=service.pgsql_owner,
-                               group=service.pgsql_owner, as_root=True)
+        if for_promote:
+            LOG.info(
+                _("Detaching slave for promotion. Use trigger to disable "
+                  "recovery mode"))
+            operating_system.write_file(TRIGGER_FILE, '')
+            operating_system.chown(TRIGGER_FILE, user=service.pgsql_owner,
+                                   group=service.pgsql_owner, as_root=True)
 
-        def _wait_for_failover():
-            """Wait until slave has switched out of recovery mode"""
-            return not service.pg_is_in_recovery()
+            def _wait_for_failover():
+                """Wait until slave has switched out of recovery mode"""
+                return not service.pg_is_in_recovery()
 
-        try:
-            utils.poll_until(_wait_for_failover, time_out=120)
+            try:
+                utils.poll_until(_wait_for_failover, time_out=120)
 
-        except exception.PollTimeOut:
-            raise RuntimeError(_("Timeout occurred waiting for slave to exit"
-                                 "recovery mode"))
+            except exception.PollTimeOut:
+                raise RuntimeError(_("Timeout occurred waiting for slave to"
+                                     " exit recovery mode"))
+        else:
+            LOG.info(
+                _("Detaching ordinary slave."
+                  " Restarting the database service."))
+            service.restart()
 
     def cleanup_source_on_replica_detach(self, admin_service, replica_info):
         pass
@@ -222,8 +231,8 @@ class PostgresqlReplicationStreaming(base.Replication):
         tmprec = "/tmp/recovery.conf.bak"
         operating_system.move(rec, tmprec, as_root=True)
 
-        cmd_full = " ".join(["pg_rewind", "-D", service.pgsql_data_dir,
-                             '--source-pgdata=' + service.pgsql_data_dir,
+        cmd_full = " ".join(["pg_rewind",
+                             '--target-pgdata=' + service.pgsql_data_dir,
                              '--source-server=' + conninfo])
         out, err = utils.execute("sudo", "su", "-", service.pgsql_owner,
                                  "-c", "%s" % cmd_full, check_exit_code=0)
@@ -306,3 +315,6 @@ class PostgresqlReplicationStreaming(base.Replication):
             'master': self.get_master_ref(None, None),
             'log_position': log_position
         }
+
+    def pre_replication_demote(self, service):
+        service.stop_db()
