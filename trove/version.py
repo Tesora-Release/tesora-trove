@@ -25,6 +25,6 @@ class VersionInfo(object):
         return self.version_string()
 
     def version_string(self):
-        return "1.9.3"
+        return "1.9.4"
 
 version_info = VersionInfo('trove')
