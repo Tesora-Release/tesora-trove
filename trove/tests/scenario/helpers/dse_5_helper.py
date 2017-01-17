@@ -1,4 +1,4 @@
-# Copyright 2011 OpenStack Foundation
+# Copyright 2015 Tesora Inc.
 # All Rights Reserved.
 #
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
@@ -13,18 +13,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-class VersionInfo(object):
-    def __init__(self, package):
-        self.package = package
-        self.version = None
+from trove.tests.scenario.helpers.cassandra_helper import CassandraHelper
 
-    def __str__(self):
-        return self.version_string()
 
-    def cached_version_string(self):
-        return self.version_string()
+class Dse_5_Helper(CassandraHelper):
 
-    def version_string(self):
-        return "1.9.7"
-
-version_info = VersionInfo('trove')
+    def __init__(self, expected_override_name, report):
+        super(Dse_5_Helper, self).__init__(expected_override_name, report)
